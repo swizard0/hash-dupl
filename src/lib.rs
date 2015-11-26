@@ -7,7 +7,6 @@ use rand::{thread_rng, Rng};
 use time::Timespec;
 
 pub struct Config {
-    pub create_at: Timespec,
     pub shingle_length: usize,
     pub signature_length: usize,
     pub similarity_threshold: f64,
@@ -23,6 +22,7 @@ pub struct Document<UD> {
 }
 
 pub struct HashDupl {
+    created_at: Timespec,
     config: Config,
     band_length: usize,
     bands_count: usize,
@@ -30,7 +30,17 @@ pub struct HashDupl {
     bands_seeds: Vec<u64>,
 }
 
+#[derive(Debug)]
+pub enum ConfigError {
+    ZeroShingleLength,
+    ZeroSignatureLength,
+    InvalidSimilarityThresholdRange,
+    InvalidBandMinProbabilityRange,
+}
+
+#[derive(Debug)]
 pub enum Error {
+    Config(ConfigError),
 }
 
 fn random_seeds(len: usize) -> Vec<u64> {
@@ -56,19 +66,32 @@ pub fn maximum_band_length(signature_length: usize, expected_min_jaccard_similar
 }
 
 impl HashDupl {
-    pub fn new(config: Config) -> Result<HashDupl, Error> {
-        let band_length = maximum_band_length(config.signature_length, config.similarity_threshold, config.band_min_probability);
-        let bands_count = ((band_length as f64) / band_length as f64).ceil() as usize;
-        let minhash_seeds = random_seeds(config.signature_length);
-        let bands_seeds = random_seeds(bands_count);
+    pub fn new(user_config: Config) -> Result<HashDupl, Error> {
+        match user_config {
+            Config { shingle_length: l, .. } if l == 0 =>
+                Err(Error::Config(ConfigError::ZeroShingleLength)),
+            Config { signature_length: l, .. } if l == 0 =>
+                Err(Error::Config(ConfigError::ZeroSignatureLength)),
+            Config { similarity_threshold: s, .. } if s < 0.0 || s > 1.0 =>
+                Err(Error::Config(ConfigError::InvalidSimilarityThresholdRange)),
+            Config { band_min_probability: p, .. } if p < 0.0 || p > 1.0 =>
+                Err(Error::Config(ConfigError::InvalidBandMinProbabilityRange)),
+            config => {
+                let band_length = maximum_band_length(config.signature_length, config.similarity_threshold, config.band_min_probability);
+                let bands_count = ((band_length as f64) / band_length as f64).ceil() as usize;
+                let minhash_seeds = random_seeds(config.signature_length);
+                let bands_seeds = random_seeds(bands_count);
 
-        Ok(HashDupl {
-            config: config,
-            band_length: band_length,
-            bands_count: bands_count,
-            minhash_seeds: minhash_seeds,
-            bands_seeds: bands_seeds,
-        })
+                Ok(HashDupl {
+                    created_at: time::get_time(),
+                    config: config,
+                    band_length: band_length,
+                    bands_count: bands_count,
+                    minhash_seeds: minhash_seeds,
+                    bands_seeds: bands_seeds,
+                })
+            },
+        }
     }
 }
 
