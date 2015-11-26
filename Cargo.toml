@@ -1,0 +1,10 @@
+[package]
+name = "hash-dupl"
+version = "0.1.0"
+authors = ["Alexey Voznyuk <me@swizard.info>"]
+
+[dependencies]
+bin-merge-pile = { git = "https://bitbucket.org/swizard/bin-merge-pile.git" }
+time = "*"
+rand = "*"
+fnv = "*"
