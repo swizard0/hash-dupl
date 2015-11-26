@@ -21,13 +21,34 @@ pub struct Document<UD> {
     user_data: UD,
 }
 
-pub struct HashDupl {
-    created_at: Timespec,
+pub struct State {
     config: Config,
+    created_at: Timespec,
     band_length: usize,
-    bands_count: usize,
     minhash_seeds: Vec<u64>,
     bands_seeds: Vec<u64>,
+}
+
+pub trait Backend {
+    type Error;
+    type UserData;
+
+    fn save_state(&mut self, &State) -> Result<(), Self::Error>;
+    fn load_state(&mut self) -> Result<State, Self::Error>;
+    fn insert(&mut self, doc: Document<Self::UserData>, bands: &[u64]) -> Result<(), Self::Error>;
+}
+
+pub trait Lexer {
+    type Error;
+    type Iter: Iterator<Item = Result<u64, Self::Error>>;
+
+    fn lexify(&mut self, text: &str) -> Result<Self::Iter, Self::Error>;
+}
+
+pub struct HashDupl<L, B> {
+    lexer: L,
+    backend: B,
+    state: State,
 }
 
 #[derive(Debug)]
@@ -39,8 +60,10 @@ pub enum ConfigError {
 }
 
 #[derive(Debug)]
-pub enum Error {
+pub enum Error<LE, BE> {
     Config(ConfigError),
+    Lexer(LE),
+    Backend(BE),
 }
 
 fn random_seeds(len: usize) -> Vec<u64> {
@@ -65,8 +88,8 @@ pub fn maximum_band_length(signature_length: usize, expected_min_jaccard_similar
     1
 }
 
-impl HashDupl {
-    pub fn new(user_config: Config) -> Result<HashDupl, Error> {
+impl<UD, L, B, LE, BE> HashDupl<L, B> where L: Lexer<Error = LE>, B: Backend<Error = BE, UserData = UD> {
+    pub fn new(lexer: L, backend: B, user_config: Config) -> Result<HashDupl<L, B>, Error<LE, BE>> {
         match user_config {
             Config { shingle_length: l, .. } if l == 0 =>
                 Err(Error::Config(ConfigError::ZeroShingleLength)),
@@ -83,12 +106,15 @@ impl HashDupl {
                 let bands_seeds = random_seeds(bands_count);
 
                 Ok(HashDupl {
-                    created_at: time::get_time(),
-                    config: config,
-                    band_length: band_length,
-                    bands_count: bands_count,
-                    minhash_seeds: minhash_seeds,
-                    bands_seeds: bands_seeds,
+                    lexer: lexer,
+                    backend: backend,
+                    state: State {
+                        config: config,
+                        created_at: time::get_time(),
+                        band_length: band_length,
+                        minhash_seeds: minhash_seeds,
+                        bands_seeds: bands_seeds,
+                    },
                 })
             },
         }
