@@ -8,7 +8,7 @@ extern crate bin_merge_pile;
 use rand::{thread_rng, Rng};
 use time::Timespec;
 
-pub mod lexer;
+pub mod shingler;
 pub mod backend;
 
 pub struct Config {
@@ -43,15 +43,14 @@ pub trait Backend {
     fn insert(&mut self, doc: Document<Self::UserData>, bands: &[u64]) -> Result<(), Self::Error>;
 }
 
-pub trait Lexer {
+pub trait Shingler {
     type Error;
-    type Iter: Iterator<Item = Result<u64, Self::Error>>;
 
-    fn lexify(&mut self, text: &str) -> Result<Self::Iter, Self::Error>;
+    fn shinglify(&mut self, text: &str, shingle_length: usize) -> Result<Vec<u64>, Self::Error>;
 }
 
-pub struct HashDupl<L, B> {
-    lexer: L,
+pub struct HashDupl<S, B> {
+    shingler: S,
     backend: B,
     state: State,
 }
@@ -65,9 +64,9 @@ pub enum ConfigError {
 }
 
 #[derive(Debug)]
-pub enum Error<LE, BE> {
+pub enum Error<SE, BE> {
     Config(ConfigError),
-    Lexer(LE),
+    Shingler(SE),
     Backend(BE),
 }
 
@@ -93,8 +92,8 @@ pub fn maximum_band_length(signature_length: usize, expected_min_jaccard_similar
     1
 }
 
-impl<UD, L, B, LE, BE> HashDupl<L, B> where L: Lexer<Error = LE>, B: Backend<Error = BE, UserData = UD> {
-    pub fn new(lexer: L, backend: B, user_config: Config) -> Result<HashDupl<L, B>, Error<LE, BE>> {
+impl<UD, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<Error = BE, UserData = UD> {
+    pub fn new(shingler: S, backend: B, user_config: Config) -> Result<HashDupl<S, B>, Error<SE, BE>> {
         match user_config {
             Config { shingle_length: l, .. } if l == 0 =>
                 Err(Error::Config(ConfigError::ZeroShingleLength)),
@@ -111,7 +110,7 @@ impl<UD, L, B, LE, BE> HashDupl<L, B> where L: Lexer<Error = LE>, B: Backend<Err
                 let bands_seeds = random_seeds(bands_count);
 
                 Ok(HashDupl {
-                    lexer: lexer,
+                    shingler: shingler,
                     backend: backend,
                     state: State {
                         config: config,
