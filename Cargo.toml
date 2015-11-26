@@ -5,6 +5,8 @@ authors = ["Alexey Voznyuk <me@swizard.info>"]
 
 [dependencies]
 bin-merge-pile = { git = "https://bitbucket.org/swizard/bin-merge-pile.git" }
+token-ngrams = { git = "git://dev.swizard.info/token-ngrams" }
+tokenizer = { git = "https://bitbucket.org/swizard/tokenizer.git" }
 time = "*"
 rand = "*"
 fnv = "*"

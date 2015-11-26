@@ -1,10 +1,15 @@
 extern crate fnv;
 extern crate rand;
 extern crate time;
+extern crate tokenizer;
+extern crate token_ngrams;
 extern crate bin_merge_pile;
 
 use rand::{thread_rng, Rng};
 use time::Timespec;
+
+pub mod lexer;
+pub mod backend;
 
 pub struct Config {
     pub shingle_length: usize,
