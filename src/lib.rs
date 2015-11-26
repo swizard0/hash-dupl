@@ -11,6 +11,7 @@ use time::Timespec;
 pub mod shingler;
 pub mod backend;
 
+#[derive(Clone, Copy, Debug)]
 pub struct Config {
     pub shingle_length: usize,
     pub signature_length: usize,
@@ -26,6 +27,7 @@ pub struct Document<UD> {
     user_data: UD,
 }
 
+#[derive(Clone, Debug)]
 pub struct State {
     config: Config,
     created_at: Timespec,
@@ -39,7 +41,7 @@ pub trait Backend {
     type UserData;
 
     fn save_state(&mut self, &State) -> Result<(), Self::Error>;
-    fn load_state(&mut self) -> Result<State, Self::Error>;
+    fn load_state(&mut self) -> Result<Option<State>, Self::Error>;
     fn insert(&mut self, doc: Document<Self::UserData>, bands: &[u64]) -> Result<(), Self::Error>;
 }
 
