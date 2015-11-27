@@ -8,8 +8,11 @@ extern crate bin_merge_pile;
 
 use std::sync::Arc;
 use std::ops::Deref;
+use std::default::Default;
+use std::hash::{Hash, Hasher};
 use rand::{thread_rng, Rng};
 use time::Timespec;
+use fnv::FnvHasher;
 
 pub mod shingler;
 pub mod backend;
@@ -22,8 +25,8 @@ pub struct Config {
     pub band_min_probability: f64,
 }
 
-impl Config {
-    pub fn default() -> Config {
+impl Default for Config {
+    fn default() -> Config {
         Config {
             shingle_length: 3,
             signature_length: 128,
@@ -125,6 +128,7 @@ pub struct HashDupl<S, B> {
     shingler: S,
     backend: B,
     state: State,
+    shingles: Vec<u64>,
 }
 
 #[derive(Debug)]
@@ -140,6 +144,7 @@ pub enum Error<SE, BE> {
     Config(ConfigError),
     Shingler(SE),
     Backend(BE),
+    NoShinglesBuilt,
 }
 
 fn random_seeds(len: usize) -> Vec<u64> {
@@ -180,24 +185,52 @@ impl<UD, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<
                     shingler: shingler,
                     backend: backend,
                     state: State::new(config),
+                    shingles: Vec::new(),
                 })
             },
         }
     }
 
-    fn sign<T>(&mut self, text: T, signature: &mut Signature) -> Result<(), Error<SE, BE>> where T: Deref<Target = str> {
+    pub fn sign<T>(&mut self, text: T, signature: &mut Signature) -> Result<(), Error<SE, BE>> where T: Deref<Target = str> {
+        try!(self.shingler.shinglify(&text, self.state.config.shingle_length, &mut self.shingles).map_err(|e| Error::Shingler(e)));
+
+        signature.clear();
+        for &seed in self.state.minhash_seeds.iter() {
+            let maybe_minhash = self.shingles
+                .iter()
+                .map(|shingle_hash| {
+                    let mut hasher = FnvHasher::default();
+                    seed.hash(&mut hasher);
+                    shingle_hash.hash(&mut hasher);
+                    hasher.finish()
+                })
+                .min()
+                .ok_or(Error::NoShinglesBuilt);
+            signature.push(try!(maybe_minhash));
+        }
+
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::maximum_band_length;
+    use super::{HashDupl, Config, Signature, maximum_band_length};
+    use super::shingler::tokens::Tokens;
+    use super::backend::in_memory::InMemory;
 
     #[test]
     fn lsh_prob() {
         assert_eq!(maximum_band_length(128, 0.4, 0.94), 3);
         assert_eq!(maximum_band_length(128, 0.5, 0.85), 4);
         assert_eq!(maximum_band_length(256, 0.7, 0.99), 6);
+    }
+
+    #[test]
+    fn sign_basic() {
+        let mut hd = HashDupl::<_, InMemory<String>>::new(Tokens::new(), InMemory::new(), Config::default()).unwrap();
+        let mut signature = Signature::new();
+        hd.sign("some text to sign and check", &mut signature).unwrap();
+        assert_eq!(signature.len(), 128);
     }
 }
