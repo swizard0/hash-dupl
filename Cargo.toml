@@ -1,12 +1,13 @@
 [package]
 name = "hash-dupl"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Alexey Voznyuk <me@swizard.info>"]
 
 [dependencies]
 bin-merge-pile = { git = "https://bitbucket.org/swizard/bin-merge-pile.git" }
-token-ngrams = { git = "git://dev.swizard.info/token-ngrams" }
 tokenizer = { git = "https://bitbucket.org/swizard/tokenizer.git" }
+token-ngrams = { git = "git://dev.swizard.info/token-ngrams" }
+slices-merger = { git = "git://dev.swizard.info/slices-merger" }
 time = "*"
 rand = "*"
 fnv = "*"

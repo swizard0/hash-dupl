@@ -3,20 +3,33 @@ extern crate rand;
 extern crate time;
 extern crate tokenizer;
 extern crate token_ngrams;
+extern crate slices_merger;
 extern crate bin_merge_pile;
 
+use std::sync::Arc;
 use rand::{thread_rng, Rng};
 use time::Timespec;
 
 pub mod shingler;
 pub mod backend;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Config {
     pub shingle_length: usize,
     pub signature_length: usize,
     pub similarity_threshold: f64,
     pub band_min_probability: f64,
+}
+
+impl Config {
+    pub fn default() -> Config {
+        Config {
+            shingle_length: 3,
+            signature_length: 128,
+            similarity_threshold: 0.4,
+            band_min_probability: 0.94,
+        }
+    }
 }
 
 pub type Signature = Vec<u64>;
@@ -27,7 +40,7 @@ pub struct Document<UD> {
     user_data: UD,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct State {
     config: Config,
     created_at: Timespec,
@@ -36,13 +49,35 @@ pub struct State {
     bands_seeds: Vec<u64>,
 }
 
+impl State {
+    pub fn new(config: Config) -> State {
+        let band_length = maximum_band_length(config.signature_length, config.similarity_threshold, config.band_min_probability);
+        let bands_count = ((band_length as f64) / band_length as f64).ceil() as usize;
+        let minhash_seeds = random_seeds(config.signature_length);
+        let bands_seeds = random_seeds(bands_count);
+        State {
+            config: config,
+            created_at: time::get_time(),
+            band_length: band_length,
+            minhash_seeds: minhash_seeds,
+            bands_seeds: bands_seeds,
+        }
+    }
+}
+
+pub trait CandidateFilter<UD> {
+    fn process(&mut self, doc: &Document<UD>) -> bool;
+}
+
 pub trait Backend {
     type Error;
     type UserData;
+    type Iter: Iterator<Item = Arc<Document<Self::UserData>>>;
 
     fn save_state(&mut self, &State) -> Result<(), Self::Error>;
     fn load_state(&mut self) -> Result<Option<State>, Self::Error>;
     fn insert(&mut self, doc: Document<Self::UserData>, bands: &[u64]) -> Result<(), Self::Error>;
+    fn lookup<F>(&mut self, bands: &[u64], filter: &mut F) -> Result<Self::Iter, Self::Error> where F: CandidateFilter<Self::UserData>;
 }
 
 pub trait Shingler {
@@ -106,21 +141,10 @@ impl<UD, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<
             Config { band_min_probability: p, .. } if p < 0.0 || p > 1.0 =>
                 Err(Error::Config(ConfigError::InvalidBandMinProbabilityRange)),
             config => {
-                let band_length = maximum_band_length(config.signature_length, config.similarity_threshold, config.band_min_probability);
-                let bands_count = ((band_length as f64) / band_length as f64).ceil() as usize;
-                let minhash_seeds = random_seeds(config.signature_length);
-                let bands_seeds = random_seeds(bands_count);
-
                 Ok(HashDupl {
                     shingler: shingler,
                     backend: backend,
-                    state: State {
-                        config: config,
-                        created_at: time::get_time(),
-                        band_length: band_length,
-                        minhash_seeds: minhash_seeds,
-                        bands_seeds: bands_seeds,
-                    },
+                    state: State::new(config),
                 })
             },
         }
