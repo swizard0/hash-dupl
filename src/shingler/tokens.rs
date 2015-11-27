@@ -71,11 +71,11 @@ impl<'a> Attrs for TokenWithHash<'a> {
 impl Shingler for Tokens {
     type Error = ();
 
-    fn shinglify(&mut self, text: &str, shingle_length: usize) -> Result<Vec<u64>, ()> {
+    fn shinglify(&mut self, text: &str, shingle_length: usize, hashed_shingles: &mut Vec<u64>) -> Result<(), ()> {
         let hashed_tokens = tokenizer::Tokens::<_, ()>::new(text.chars().flat_map(|c| c.to_lowercase().map(|lc| Ok(lc))))
             .map(|token| token.map(|tok| TokenWithHash::new(tok, self.stop_words.as_ref())));
         let ngrams_iter = Ngrams::new(hashed_tokens, shingle_length, AcceptEverything);
-        let mut hashed_ngrams: Vec<_> = ngrams_iter
+        let hashed_ngrams_iter = ngrams_iter
             .map(|g| g.unwrap().ngram)
             .map(|ngram| {
                 let mut hasher = FnvHasher::default();
@@ -83,10 +83,11 @@ impl Shingler for Tokens {
                     tok.hash.hash(&mut hasher)
                 }
                 hasher.finish()
-            })
-            .collect();
-        hashed_ngrams.sort();
-        Ok(hashed_ngrams)
+            });
+        hashed_shingles.clear();
+        hashed_shingles.extend(hashed_ngrams_iter);
+        hashed_shingles.sort();
+        Ok(())
     }
 }
 
@@ -98,7 +99,8 @@ mod test {
     #[test]
     fn shinglify_some() {
         let mut t = Tokens::new();
-        let shingles = t.shinglify("Create pointer to the data and increase the reference counter.", 3).unwrap();
+        let mut shingles = Vec::new();
+        t.shinglify("Create pointer to the data and increase the reference counter.", 3, &mut shingles).unwrap();
         assert_eq!(shingles,
                    vec![219189533156472843, 752905498211977740, 906776722371435292, 1198374789896484484, 1627016984320289849,
                         2709404953724036216, 4754942937748297979, 6529366725122468182, 6773681406702382296, 7445513554970959646,
@@ -112,7 +114,8 @@ mod test {
     fn shinglify_stop_words() {
         let mut t = Tokens::new();
         t.set_stop_words::<_, ()>(["to", "the", "and", "."].into_iter().map(|&s| Ok(s.to_owned()))).unwrap();
-        let shingles = t.shinglify("Create pointer to the data and increase the reference counter.", 3).unwrap();
+        let mut shingles = Vec::new();
+        t.shinglify("Create pointer to the data and increase the reference counter.", 3, &mut shingles).unwrap();
         assert_eq!(shingles,
                    vec![219189533156472843, 2709404953724036216, 4754942937748297979, 7861918477386412141, 8230815495134460693,
                         8969221563668974120, 12188844219384569804, 12309543090974928189, 12596819376607615678, 14124759991247487330,

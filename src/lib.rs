@@ -118,7 +118,7 @@ pub trait Backend {
 pub trait Shingler {
     type Error;
 
-    fn shinglify(&mut self, text: &str, shingle_length: usize) -> Result<Vec<u64>, Self::Error>;
+    fn shinglify(&mut self, text: &str, shingle_length: usize, hashed_shingles: &mut Vec<u64>) -> Result<(), Self::Error>;
 }
 
 pub struct HashDupl<S, B> {
@@ -183,6 +183,10 @@ impl<UD, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<
                 })
             },
         }
+    }
+
+    fn sign<T>(&mut self, text: T, signature: &mut Signature) -> Result<(), Error<SE, BE>> where T: Deref<Target = str> {
+        Ok(())
     }
 }
 
