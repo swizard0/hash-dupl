@@ -7,6 +7,7 @@ extern crate slices_merger;
 extern crate bin_merge_pile;
 
 use std::sync::Arc;
+use std::ops::Deref;
 use rand::{thread_rng, Rng};
 use time::Timespec;
 
@@ -37,6 +38,14 @@ pub type Signature = Vec<u64>;
 pub struct Document<UD> {
     signature: Signature,
     user_data: UD,
+}
+
+impl<UD> Deref for Document<UD> {
+    type Target = UD;
+
+    fn deref(&self) -> &UD {
+        &self.user_data
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -101,6 +110,9 @@ pub trait Backend {
     fn insert(&mut self, doc: Document<Self::UserData>, bands: &[u64]) -> Result<(), Self::Error>;
     fn lookup<C, CE>(&mut self, bands: &[u64], collector: &mut C) -> Result<(), LookupError<Self::Error, CE>>
         where C: CandidatesCollector<Error = CE, UserData = Self::UserData>;
+    fn rotate(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 pub trait Shingler {
