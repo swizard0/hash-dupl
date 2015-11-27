@@ -35,7 +35,6 @@ impl Config {
 pub type Signature = Vec<u64>;
 
 pub struct Document<UD> {
-    similarity: f64,
     signature: Signature,
     user_data: UD,
 }
@@ -65,19 +64,43 @@ impl State {
     }
 }
 
-pub trait CandidateFilter<UD> {
-    fn process(&mut self, doc: &Document<UD>) -> bool;
+pub trait CandidatesCollector {
+    type Error;
+    type UserData;
+
+    fn accept_signature(&mut self, signature: &Signature) -> bool;
+    fn receive(&mut self, doc: Arc<Document<Self::UserData>>) -> Result<(), Self::Error>;
+}
+
+impl<T> CandidatesCollector for Vec<Arc<Document<T>>> {
+    type Error = ();
+    type UserData = T;
+
+    fn accept_signature(&mut self, _signature: &Signature) -> bool {
+        true
+    }
+
+    fn receive(&mut self, doc: Arc<Document<T>>) -> Result<(), ()> {
+        self.push(doc);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum LookupError<BE, CE> {
+    Backend(BE),
+    Collector(CE),
 }
 
 pub trait Backend {
     type Error;
     type UserData;
-    type Iter: Iterator<Item = Arc<Document<Self::UserData>>>;
 
     fn save_state(&mut self, &State) -> Result<(), Self::Error>;
     fn load_state(&mut self) -> Result<Option<State>, Self::Error>;
     fn insert(&mut self, doc: Document<Self::UserData>, bands: &[u64]) -> Result<(), Self::Error>;
-    fn lookup<F>(&mut self, bands: &[u64], filter: &mut F) -> Result<Self::Iter, Self::Error> where F: CandidateFilter<Self::UserData>;
+    fn lookup<C, CE>(&mut self, bands: &[u64], collector: &mut C) -> Result<(), LookupError<Self::Error, CE>>
+        where C: CandidatesCollector<Error = CE, UserData = Self::UserData>;
 }
 
 pub trait Shingler {
