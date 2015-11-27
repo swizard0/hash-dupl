@@ -129,6 +129,7 @@ pub struct HashDupl<S, B> {
     backend: B,
     state: State,
     shingles: Vec<u64>,
+    bands: Vec<u64>,
 }
 
 #[derive(Debug)]
@@ -186,6 +187,7 @@ impl<UD, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<
                     backend: backend,
                     state: State::new(config),
                     shingles: Vec::new(),
+                    bands: Vec::new(),
                 })
             },
         }
@@ -210,6 +212,27 @@ impl<UD, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<
         }
 
         Ok(())
+    }
+
+    fn build_bands(&mut self, signature: &Signature) {
+        self.bands.clear();
+        let mut start = 0;
+        for &seed in self.state.bands_seeds.iter() {
+            let mut hasher = FnvHasher::default();
+            seed.hash(&mut hasher);
+
+            let mut end = start + self.state.band_length;
+            if end > self.state.config.signature_length {
+                end = self.state.config.signature_length;
+            }
+
+            for minhash in signature[start .. end].iter() {
+                minhash.hash(&mut hasher);
+            }
+
+            self.bands.push(hasher.finish());
+            start += self.state.band_length;
+        }
     }
 }
 
