@@ -41,15 +41,6 @@ pub struct Signature {
     bands: Vec<u64>,
 }
 
-impl Signature {
-    pub fn new() -> Signature {
-        Signature {
-            minhash: Vec::new(),
-            bands: Vec::new(),
-        }
-    }
-}
-
 #[derive(Clone, PartialEq, Debug)]
 pub struct State {
     config: Config,
@@ -118,8 +109,8 @@ pub trait Backend {
 
     fn save_state(&mut self, &State) -> Result<(), Self::Error>;
     fn load_state(&mut self) -> Result<Option<State>, Self::Error>;
-    fn insert(&mut self, signature: &Signature, doc: Self::Document) -> Result<(), Self::Error>;
-    fn lookup<C, CE>(&mut self, signature: &Signature, collector: &mut C) -> Result<(), LookupError<Self::Error, CE>>
+    fn insert(&mut self, signature: Arc<Signature>, doc: Self::Document) -> Result<(), Self::Error>;
+    fn lookup<C, CE>(&mut self, signature: Arc<Signature>, collector: &mut C) -> Result<(), LookupError<Self::Error, CE>>
         where C: CandidatesCollector<Error = CE, Document = Self::Document>;
     fn rotate(&mut self) -> Result<(), Self::Error> {
         Ok(())
@@ -216,8 +207,12 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
         self.shingler.shinglify(&text, self.state.config.shingle_length, shingles).map_err(|e| Error::Shingler(e))
     }
 
-    pub fn sign<'a>(&mut self, shingles: &Shingles, signature: &'a mut Signature) -> Result<&'a Signature, Error<SE, BE>> {
-        signature.minhash.clear();
+    pub fn sign<'a>(&mut self, shingles: &Shingles) -> Result<Arc<Signature>, Error<SE, BE>> {
+        let mut signature = Signature {
+            minhash: Vec::with_capacity(self.state.minhash_seeds.len()),
+            bands: Vec::with_capacity(self.state.bands_seeds.len()),
+        };
+
         for &seed in self.state.minhash_seeds.iter() {
             let maybe_minhash = shingles.0.iter()
                 .map(|shingle_hash| {
@@ -231,7 +226,6 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
             signature.minhash.push(try!(maybe_minhash));
         }
 
-        signature.bands.clear();
         let mut start = 0;
         for &seed in self.state.bands_seeds.iter() {
             let mut hasher = FnvHasher::default();
@@ -250,14 +244,14 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
             start += self.state.band_length;
         }
 
-        Ok(signature)
+        Ok(Arc::new(signature))
     }
 
-    pub fn insert(&mut self, signature: &Signature, document: D) -> Result<(), Error<SE, BE>> {
+    pub fn insert(&mut self, signature: Arc<Signature>, document: D) -> Result<(), Error<SE, BE>> {
         self.backend.insert(signature, document).map_err(|e| Error::Backend(e))
     }
 
-    pub fn lookup_best(&mut self, signature: &Signature) -> Result<Option<LookupResult<D>>, Error<SE, BE>> {
+    pub fn lookup_best(&mut self, signature: Arc<Signature>) -> Result<Option<LookupResult<D>>, Error<SE, BE>> {
         struct BestDocFinder<D> {
             last_sim: Option<f64>,
             best: Option<LookupResult<D>>,
@@ -304,7 +298,7 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
 #[cfg(test)]
 mod test {
     use std::sync::Arc;
-    use super::{HashDupl, Config, Shingles, Signature, maximum_band_length};
+    use super::{HashDupl, Config, Shingles, maximum_band_length};
     use super::shingler::tokens::Tokens;
     use super::backend::in_memory::InMemory;
 
@@ -319,9 +313,8 @@ mod test {
     fn shinglify_sign_basic() {
         let mut hd = HashDupl::<_, InMemory<String>>::new(Tokens::new(), InMemory::new(), Config::default()).unwrap();
         let mut shingles = Shingles::new();
-        let mut signature = Signature::new();
         hd.shinglify("some text to sign and check", &mut shingles).unwrap();
-        hd.sign(&shingles, &mut signature).unwrap();
+        let signature = hd.sign(&shingles).unwrap();
         assert_eq!(shingles.0.len(), 15);
         assert_eq!(signature.minhash.len(), 128);
     }
@@ -330,23 +323,22 @@ mod test {
     fn insert_lookup_best_basic() {
         let mut hd = HashDupl::new(Tokens::new(), InMemory::new(), Config::default()).unwrap();
         let mut shingles = Shingles::new();
-        let mut signature = Signature::new();
         hd.shinglify("some text to sign and check", &mut shingles).unwrap();
-        hd.sign(&shingles, &mut signature).unwrap();
-        hd.insert(&signature, 177).unwrap();
+        let signature = hd.sign(&shingles).unwrap();
+        hd.insert(signature, 177).unwrap();
 
         hd.shinglify("then some other text to sign and maybe check", &mut shingles).unwrap();
-        hd.sign(&shingles, &mut signature).unwrap();
-        hd.insert(&signature, 277).unwrap();
+        let signature = hd.sign(&shingles).unwrap();
+        hd.insert(signature, 277).unwrap();
 
         hd.shinglify("text to sign and check", &mut shingles).unwrap();
-        hd.sign(&shingles, &mut signature).unwrap();
-        let found_a = hd.lookup_best(&signature).unwrap().unwrap();
+        let signature = hd.sign(&shingles).unwrap();
+        let found_a = hd.lookup_best(signature).unwrap().unwrap();
         assert_eq!(found_a.document, Arc::new(177));
 
         hd.shinglify("some other text to sign and", &mut shingles).unwrap();
-        hd.sign(&shingles, &mut signature).unwrap();
-        let found_b = hd.lookup_best(&signature).unwrap().unwrap();
+        let signature = hd.sign(&shingles).unwrap();
+        let found_b = hd.lookup_best(signature).unwrap().unwrap();
 
         assert_eq!(found_b.document, Arc::new(277));
     }

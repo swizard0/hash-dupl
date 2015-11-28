@@ -67,7 +67,7 @@ impl<D> Backend for InMemory<D> {
         Ok(self.state.clone())
     }
 
-    fn insert(&mut self, signature: &Signature, doc: D) -> Result<(), ()> {
+    fn insert(&mut self, signature: Arc<Signature>, doc: D) -> Result<(), ()> {
         let id = self.serial;
         self.serial += 1;
         let entry = Arc::new(DocEntry {
@@ -82,7 +82,7 @@ impl<D> Backend for InMemory<D> {
         Ok(())
     }
 
-    fn lookup<C, CE>(&mut self, signature: &Signature, collector: &mut C) -> Result<(), LookupError<(), CE>>
+    fn lookup<C, CE>(&mut self, signature: Arc<Signature>, collector: &mut C) -> Result<(), LookupError<(), CE>>
         where C: CandidatesCollector<Error = CE, Document = D>
     {
         self.merger.reset();
@@ -120,23 +120,23 @@ mod test {
     #[test]
     fn insert_lookup() {
         let mut backend = InMemory::<String>::new();
-        backend.insert(&Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], },
+        backend.insert(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], }),
                        "some text".to_owned()).unwrap();
-        backend.insert(&Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], },
+        backend.insert(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], }),
                        "some other text".to_owned()).unwrap();
 
         let mut results = Vec::new();
-        backend.lookup(&Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }, &mut results).unwrap();
+        backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }), &mut results).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].similarity, 1.0);
         assert_eq!(results[0].document, Arc::new("some text".to_owned()));
         results.clear();
-        backend.lookup(&Signature { minhash: vec![4, 5, 6], bands: vec![200, 500, 600, 700], }, &mut results).unwrap();
+        backend.lookup(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 500, 600, 700], }), &mut results).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].similarity, 1.0);
         assert_eq!(results[0].document, Arc::new("some other text".to_owned()));
         results.clear();
-        backend.lookup(&Signature { minhash: vec![1, 2, 4], bands: vec![300], }, &mut results).unwrap();
+        backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }), &mut results).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].document, Arc::new("some text".to_owned()));
         assert_eq!(results[1].document, Arc::new("some other text".to_owned()));
