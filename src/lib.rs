@@ -293,12 +293,21 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
             Err(LookupError::Collector(())) => unreachable!(),
         }
     }
+
+    pub fn lookup_all(&mut self, signature: Arc<Signature>) -> Result<Vec<LookupResult<D>>, Error<SE, BE>> {
+        let mut collector = Vec::new();
+        match self.backend.lookup(signature, &mut collector) {
+            Ok(()) => Ok(collector),
+            Err(LookupError::Backend(e)) => Err(Error::Backend(e)),
+            Err(LookupError::Collector(())) => unreachable!(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
     use std::sync::Arc;
-    use super::{HashDupl, Config, Shingles, maximum_band_length};
+    use super::{HashDupl, Config, Shingles, LookupResult, maximum_band_length};
     use super::shingler::tokens::Tokens;
     use super::backend::in_memory::InMemory;
 
@@ -320,7 +329,7 @@ mod test {
     }
 
     #[test]
-    fn insert_lookup_best_basic() {
+    fn insert_lookup_basic() {
         let mut hd = HashDupl::new(Tokens::new(), InMemory::new(), Config::default()).unwrap();
         let mut shingles = Shingles::new();
         hd.shinglify("some text to sign and check", &mut shingles).unwrap();
@@ -339,7 +348,19 @@ mod test {
         hd.shinglify("some other text to sign and", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         let found_b = hd.lookup_best(signature).unwrap().unwrap();
-
         assert_eq!(found_b.document, Arc::new(277));
+
+        hd.shinglify("some text to sign and check", &mut shingles).unwrap();
+        let signature = hd.sign(&shingles).unwrap();
+        let mut found_all = hd.lookup_all(signature).unwrap();
+        found_all.sort_by(|a, b| a.document.cmp(&b.document));
+        match found_all.get(0) {
+            Some(&LookupResult { similarity: sim, document: ref doc, }) if sim > 0.99 && doc == &Arc::new(177) => (),
+            other => panic!("unexpected result 0: {:?}", other),
+        }
+        match found_all.get(1) {
+            Some(&LookupResult { similarity: sim, document: ref doc, }) if sim > 0.25 && doc == &Arc::new(277) => (),
+            other => panic!("unexpected result 1: {:?}", other),
+        }
     }
 }
