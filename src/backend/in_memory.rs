@@ -3,43 +3,48 @@ use std::clone::Clone;
 use std::collections::HashMap;
 use std::cmp::{PartialEq, PartialOrd, Ordering};
 use slices_merger::SlicesMerger;
-use super::super::{Backend, CandidatesCollector, Document, State, LookupError};
+use super::super::{Backend, CandidatesCollector, Signature, State, LookupError};
 
-struct DocWithId<UD> {
-    id: u64,
-    doc: Arc<Document<UD>>,
+struct DocEntry<D> {
+    minhash: Box<[u64]>,
+    doc: Arc<D>,
 }
 
-impl<UD> Clone for DocWithId<UD> {
-    fn clone(&self) -> DocWithId<UD> {
+struct DocWithId<D> {
+    id: u64,
+    entry: Arc<DocEntry<D>>,
+}
+
+impl<D> Clone for DocWithId<D> {
+    fn clone(&self) -> DocWithId<D> {
         DocWithId {
             id: self.id,
-            doc: self.doc.clone(),
+            entry: self.entry.clone(),
         }
     }
 }
 
-impl<UD> PartialEq for DocWithId<UD> {
-    fn eq(&self, other: &DocWithId<UD>) -> bool {
+impl<D> PartialEq for DocWithId<D> {
+    fn eq(&self, other: &DocWithId<D>) -> bool {
         self.id.eq(&other.id)
     }
 }
 
-impl<UD> PartialOrd for DocWithId<UD> {
-    fn partial_cmp(&self, other: &DocWithId<UD>) -> Option<Ordering> {
+impl<D> PartialOrd for DocWithId<D> {
+    fn partial_cmp(&self, other: &DocWithId<D>) -> Option<Ordering> {
         self.id.partial_cmp(&other.id)
     }
 }
 
-pub struct InMemory<UD> {
+pub struct InMemory<D> {
     serial: u64,
-    bands_index: HashMap<u64, Vec<DocWithId<UD>>>,
+    bands_index: HashMap<u64, Vec<DocWithId<D>>>,
     state: Option<State>,
-    merger: SlicesMerger<DocWithId<UD>>,
+    merger: SlicesMerger<DocWithId<D>>,
 }
 
-impl<UD> InMemory<UD> {
-    pub fn new() -> InMemory<UD> {
+impl<D> InMemory<D> {
+    pub fn new() -> InMemory<D> {
         InMemory {
             serial: 0,
             bands_index: HashMap::new(),
@@ -49,9 +54,9 @@ impl<UD> InMemory<UD> {
     }
 }
 
-impl<UD> Backend for InMemory<UD> {
+impl<D> Backend for InMemory<D> {
     type Error = ();
-    type UserData = UD;
+    type Document = D;
 
     fn save_state(&mut self, state: &State) -> Result<(), ()> {
         self.state = Some(state.clone());
@@ -62,30 +67,34 @@ impl<UD> Backend for InMemory<UD> {
         Ok(self.state.clone())
     }
 
-    fn insert(&mut self, doc: Document<UD>, bands: &[u64]) -> Result<(), ()> {
+    fn insert(&mut self, signature: &Signature, doc: D) -> Result<(), ()> {
         let id = self.serial;
         self.serial += 1;
-        let shared_doc = Arc::new(doc);
-        for &band in bands.iter() {
+        let entry = Arc::new(DocEntry {
+            minhash: signature.minhash.clone().into_boxed_slice(),
+            doc: Arc::new(doc),
+        });
+
+        for &band in signature.bands.iter() {
             let docs = self.bands_index.entry(band).or_insert(Vec::new());
-            docs.push(DocWithId { id: id, doc: shared_doc.clone(), });
+            docs.push(DocWithId { id: id, entry: entry.clone(), });
         }
         Ok(())
     }
 
-    fn lookup<C, CE>(&mut self, bands: &[u64], collector: &mut C) -> Result<(), LookupError<(), CE>>
-        where C: CandidatesCollector<Error = CE, UserData = UD>
+    fn lookup<C, CE>(&mut self, signature: &Signature, collector: &mut C) -> Result<(), LookupError<(), CE>>
+        where C: CandidatesCollector<Error = CE, Document = D>
     {
         self.merger.reset();
-        for band in bands {
+        for band in signature.bands.iter() {
             if let Some(docs) = self.bands_index.get(band) {
                 self.merger.add(&docs);
             }
         }
 
-        for &DocWithId { doc: ref candidate_doc, .. } in self.merger.iter() {
-            if collector.accept_signature(&candidate_doc.signature) {
-                try!(collector.receive(candidate_doc.clone()).map_err(|e| LookupError::Collector(e)));
+        for &DocWithId { entry: ref e, .. } in self.merger.iter() {
+            if collector.accept_minhash(&signature.minhash, &e.minhash) {
+                try!(collector.receive(&signature.minhash, &e.minhash, e.doc.clone()).map_err(|e| LookupError::Collector(e)));
             }
         }
 
@@ -95,8 +104,9 @@ impl<UD> Backend for InMemory<UD> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
     use super::InMemory;
-    use super::super::super::{Backend, Document, State, Config};
+    use super::super::super::{Backend, Signature, State, Config};
 
     #[test]
     fn save_load_state() {
@@ -110,31 +120,25 @@ mod test {
     #[test]
     fn insert_lookup() {
         let mut backend = InMemory::<String>::new();
-        backend.insert(Document {
-            signature: vec![1, 2, 3],
-            user_data: "some text".to_owned(),
-        }, &[100, 300, 400]).unwrap();
-        backend.insert(Document {
-            signature: vec![4, 5, 6, 7],
-            user_data: "some other text".to_owned(),
-        }, &[200, 300, 500]).unwrap();
+        backend.insert(&Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], },
+                       "some text".to_owned()).unwrap();
+        backend.insert(&Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], },
+                       "some other text".to_owned()).unwrap();
 
         let mut results = Vec::new();
-        backend.lookup(&[100, 400], &mut results).unwrap();
+        backend.lookup(&Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }, &mut results).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(&results[0].signature, &[1, 2, 3]);
-        assert_eq!(&results[0].user_data, "some text");
+        assert_eq!(results[0].similarity, 1.0);
+        assert_eq!(results[0].document, Arc::new("some text".to_owned()));
         results.clear();
-        backend.lookup(&[200, 500, 600, 700], &mut results).unwrap();
+        backend.lookup(&Signature { minhash: vec![4, 5, 6], bands: vec![200, 500, 600, 700], }, &mut results).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(&results[0].signature, &[4, 5, 6, 7]);
-        assert_eq!(&results[0].user_data, "some other text");
+        assert_eq!(results[0].similarity, 1.0);
+        assert_eq!(results[0].document, Arc::new("some other text".to_owned()));
         results.clear();
-        backend.lookup(&[300], &mut results).unwrap();
+        backend.lookup(&Signature { minhash: vec![1, 2, 4], bands: vec![300], }, &mut results).unwrap();
         assert_eq!(results.len(), 2);
-        assert_eq!(&results[0].signature, &[1, 2, 3]);
-        assert_eq!(&results[0].user_data, "some text");
-        assert_eq!(&results[1].signature, &[4, 5, 6, 7]);
-        assert_eq!(&results[1].user_data, "some other text");
+        assert_eq!(results[0].document, Arc::new("some text".to_owned()));
+        assert_eq!(results[1].document, Arc::new("some other text".to_owned()));
     }
 }

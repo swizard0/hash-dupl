@@ -36,18 +36,17 @@ impl Default for Config {
     }
 }
 
-pub type Signature = Vec<u64>;
-
-pub struct Document<UD> {
-    signature: Signature,
-    user_data: UD,
+pub struct Signature {
+    minhash: Vec<u64>,
+    bands: Vec<u64>,
 }
 
-impl<UD> Deref for Document<UD> {
-    type Target = UD;
-
-    fn deref(&self) -> &UD {
-        &self.user_data
+impl Signature {
+    pub fn new() -> Signature {
+        Signature {
+            minhash: Vec::new(),
+            bands: Vec::new(),
+        }
     }
 }
 
@@ -63,7 +62,7 @@ pub struct State {
 impl State {
     pub fn new(config: Config) -> State {
         let band_length = maximum_band_length(config.signature_length, config.similarity_threshold, config.band_min_probability);
-        let bands_count = ((band_length as f64) / band_length as f64).ceil() as usize;
+        let bands_count = ((config.signature_length as f64) / band_length as f64).ceil() as usize;
         let minhash_seeds = random_seeds(config.signature_length);
         let bands_seeds = random_seeds(bands_count);
         State {
@@ -78,22 +77,31 @@ impl State {
 
 pub trait CandidatesCollector {
     type Error;
-    type UserData;
+    type Document;
 
-    fn accept_signature(&mut self, signature: &Signature) -> bool;
-    fn receive(&mut self, doc: Arc<Document<Self::UserData>>) -> Result<(), Self::Error>;
+    fn accept_minhash(&mut self, sample_minhash: &[u64], minhash: &[u64]) -> bool;
+    fn receive(&mut self, sample_minhash: &[u64], minhash: &[u64], doc: Arc<Self::Document>) -> Result<(), Self::Error>;
 }
 
-impl<T> CandidatesCollector for Vec<Arc<Document<T>>> {
-    type Error = ();
-    type UserData = T;
+#[derive(Debug)]
+pub struct LookupResult<D> {
+    pub similarity: f64,
+    pub document: Arc<D>,
+}
 
-    fn accept_signature(&mut self, _signature: &Signature) -> bool {
+impl<D> CandidatesCollector for Vec<LookupResult<D>> {
+    type Error = ();
+    type Document = D;
+
+    fn accept_minhash(&mut self, _sample_minhash: &[u64], _minhash: &[u64]) -> bool {
         true
     }
 
-    fn receive(&mut self, doc: Arc<Document<T>>) -> Result<(), ()> {
-        self.push(doc);
+    fn receive(&mut self, sample_minhash: &[u64], minhash: &[u64], doc: Arc<D>) -> Result<(), ()> {
+        self.push(LookupResult {
+            similarity: minhash_distance(sample_minhash, minhash),
+            document: doc,
+        });
         Ok(())
     }
 }
@@ -106,30 +114,36 @@ pub enum LookupError<BE, CE> {
 
 pub trait Backend {
     type Error;
-    type UserData;
+    type Document;
 
     fn save_state(&mut self, &State) -> Result<(), Self::Error>;
     fn load_state(&mut self) -> Result<Option<State>, Self::Error>;
-    fn insert(&mut self, doc: Document<Self::UserData>, bands: &[u64]) -> Result<(), Self::Error>;
-    fn lookup<C, CE>(&mut self, bands: &[u64], collector: &mut C) -> Result<(), LookupError<Self::Error, CE>>
-        where C: CandidatesCollector<Error = CE, UserData = Self::UserData>;
+    fn insert(&mut self, signature: &Signature, doc: Self::Document) -> Result<(), Self::Error>;
+    fn lookup<C, CE>(&mut self, signature: &Signature, collector: &mut C) -> Result<(), LookupError<Self::Error, CE>>
+        where C: CandidatesCollector<Error = CE, Document = Self::Document>;
     fn rotate(&mut self) -> Result<(), Self::Error> {
         Ok(())
+    }
+}
+
+pub struct Shingles(Vec<u64>);
+
+impl Shingles {
+    pub fn new() -> Shingles {
+        Shingles(Vec::new())
     }
 }
 
 pub trait Shingler {
     type Error;
 
-    fn shinglify(&mut self, text: &str, shingle_length: usize, hashed_shingles: &mut Vec<u64>) -> Result<(), Self::Error>;
+    fn shinglify<'a>(&mut self, text: &str, shingle_length: usize, hashed_shingles: &'a mut Shingles) -> Result<&'a Shingles, Self::Error>;
 }
 
 pub struct HashDupl<S, B> {
     shingler: S,
     backend: B,
     state: State,
-    shingles: Vec<u64>,
-    bands: Vec<u64>,
 }
 
 #[derive(Debug)]
@@ -170,7 +184,14 @@ pub fn maximum_band_length(signature_length: usize, expected_min_jaccard_similar
     1
 }
 
-impl<UD, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<Error = BE, UserData = UD> {
+pub fn minhash_distance(minhash_a: &[u64], minhash_b: &[u64]) -> f64 {
+    assert!(!minhash_a.is_empty());
+    assert_eq!(minhash_a.len(), minhash_b.len());
+    let matched = minhash_a.iter().zip(minhash_b.iter()).filter(|&(a, b)| a == b).count();
+    matched as f64 / minhash_a.len() as f64
+}
+
+impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<Error = BE, Document = D> {
     pub fn new(shingler: S, backend: B, user_config: Config) -> Result<HashDupl<S, B>, Error<SE, BE>> {
         match user_config {
             Config { shingle_length: l, .. } if l == 0 =>
@@ -186,20 +207,19 @@ impl<UD, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<
                     shingler: shingler,
                     backend: backend,
                     state: State::new(config),
-                    shingles: Vec::new(),
-                    bands: Vec::new(),
                 })
             },
         }
     }
 
-    pub fn sign<T>(&mut self, text: T, signature: &mut Signature) -> Result<(), Error<SE, BE>> where T: Deref<Target = str> {
-        try!(self.shingler.shinglify(&text, self.state.config.shingle_length, &mut self.shingles).map_err(|e| Error::Shingler(e)));
+    pub fn shinglify<'a, T>(&mut self, text: T, shingles: &'a mut Shingles) -> Result<&'a Shingles, Error<SE, BE>> where T: Deref<Target = str> {
+        self.shingler.shinglify(&text, self.state.config.shingle_length, shingles).map_err(|e| Error::Shingler(e))
+    }
 
-        signature.clear();
+    pub fn sign<'a>(&mut self, shingles: &Shingles, signature: &'a mut Signature) -> Result<&'a Signature, Error<SE, BE>> {
+        signature.minhash.clear();
         for &seed in self.state.minhash_seeds.iter() {
-            let maybe_minhash = self.shingles
-                .iter()
+            let maybe_minhash = shingles.0.iter()
                 .map(|shingle_hash| {
                     let mut hasher = FnvHasher::default();
                     seed.hash(&mut hasher);
@@ -208,14 +228,10 @@ impl<UD, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<
                 })
                 .min()
                 .ok_or(Error::NoShinglesBuilt);
-            signature.push(try!(maybe_minhash));
+            signature.minhash.push(try!(maybe_minhash));
         }
 
-        Ok(())
-    }
-
-    fn build_bands(&mut self, signature: &Signature) {
-        self.bands.clear();
+        signature.bands.clear();
         let mut start = 0;
         for &seed in self.state.bands_seeds.iter() {
             let mut hasher = FnvHasher::default();
@@ -226,19 +242,69 @@ impl<UD, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<
                 end = self.state.config.signature_length;
             }
 
-            for minhash in signature[start .. end].iter() {
+            for minhash in signature.minhash[start .. end].iter() {
                 minhash.hash(&mut hasher);
             }
 
-            self.bands.push(hasher.finish());
+            signature.bands.push(hasher.finish());
             start += self.state.band_length;
+        }
+
+        Ok(signature)
+    }
+
+    pub fn insert(&mut self, signature: &Signature, document: D) -> Result<(), Error<SE, BE>> {
+        self.backend.insert(signature, document).map_err(|e| Error::Backend(e))
+    }
+
+    pub fn lookup_best(&mut self, signature: &Signature) -> Result<Option<LookupResult<D>>, Error<SE, BE>> {
+        struct BestDocFinder<D> {
+            last_sim: Option<f64>,
+            best: Option<LookupResult<D>>,
+        }
+
+        impl<D> CandidatesCollector for BestDocFinder<D> {
+            type Error = ();
+            type Document = D;
+
+            fn accept_minhash(&mut self, sample_minhash: &[u64], minhash: &[u64]) -> bool {
+                let next_best = match (minhash_distance(sample_minhash, minhash), &self.best) {
+                    (sim, &None) => Some(sim),
+                    (sim, &Some(LookupResult { similarity: best_sim, .. })) if sim > best_sim => Some(sim),
+                    _ => None,
+                };
+                self.last_sim = next_best;
+                self.last_sim.is_some()
+            }
+
+            fn receive(&mut self, _sample_minhash: &[u64], _minhash: &[u64], doc: Arc<D>) -> Result<(), ()> {
+                if let Some(sim) = self.last_sim {
+                    self.best = Some(LookupResult {
+                        similarity: sim,
+                        document: doc,
+                    });
+                }
+                Ok(())
+            }
+        }
+
+        let mut collector = BestDocFinder {
+            last_sim: None,
+            best: None,
+        };
+
+        match self.backend.lookup(signature, &mut collector) {
+            Ok(()) => Ok(collector.best),
+            Err(LookupError::Backend(e)) => Err(Error::Backend(e)),
+            Err(LookupError::Collector(())) => unreachable!(),
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{HashDupl, Config, Signature, maximum_band_length};
+    use std::sync::Arc;
+    use super::{HashDupl, Config, Shingles, Signature, maximum_band_length};
     use super::shingler::tokens::Tokens;
     use super::backend::in_memory::InMemory;
 
@@ -250,10 +316,38 @@ mod test {
     }
 
     #[test]
-    fn sign_basic() {
+    fn shinglify_sign_basic() {
         let mut hd = HashDupl::<_, InMemory<String>>::new(Tokens::new(), InMemory::new(), Config::default()).unwrap();
+        let mut shingles = Shingles::new();
         let mut signature = Signature::new();
-        hd.sign("some text to sign and check", &mut signature).unwrap();
-        assert_eq!(signature.len(), 128);
+        hd.shinglify("some text to sign and check", &mut shingles).unwrap();
+        hd.sign(&shingles, &mut signature).unwrap();
+        assert_eq!(shingles.0.len(), 15);
+        assert_eq!(signature.minhash.len(), 128);
+    }
+
+    #[test]
+    fn insert_lookup_best_basic() {
+        let mut hd = HashDupl::new(Tokens::new(), InMemory::new(), Config::default()).unwrap();
+        let mut shingles = Shingles::new();
+        let mut signature = Signature::new();
+        hd.shinglify("some text to sign and check", &mut shingles).unwrap();
+        hd.sign(&shingles, &mut signature).unwrap();
+        hd.insert(&signature, 177).unwrap();
+
+        hd.shinglify("then some other text to sign and maybe check", &mut shingles).unwrap();
+        hd.sign(&shingles, &mut signature).unwrap();
+        hd.insert(&signature, 277).unwrap();
+
+        hd.shinglify("text to sign and check", &mut shingles).unwrap();
+        hd.sign(&shingles, &mut signature).unwrap();
+        let found_a = hd.lookup_best(&signature).unwrap().unwrap();
+        assert_eq!(found_a.document, Arc::new(177));
+
+        hd.shinglify("some other text to sign and", &mut shingles).unwrap();
+        hd.sign(&shingles, &mut signature).unwrap();
+        let found_b = hd.lookup_best(&signature).unwrap().unwrap();
+
+        assert_eq!(found_b.document, Arc::new(277));
     }
 }
