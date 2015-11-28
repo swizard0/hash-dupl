@@ -203,6 +203,14 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
         }
     }
 
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
+    pub fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
+    }
+
     pub fn shinglify<'a, T>(&mut self, text: T, shingles: &'a mut Shingles) -> Result<&'a Shingles, Error<SE, BE>> where T: Deref<Target = str> {
         self.shingler.shinglify(&text, self.state.config.shingle_length, shingles).map_err(|e| Error::Shingler(e))
     }
