@@ -1,6 +1,8 @@
 extern crate fnv;
 extern crate rand;
 extern crate time;
+extern crate serde;
+extern crate rmp_serde;
 extern crate tokenizer;
 extern crate token_ngrams;
 extern crate slices_merger;

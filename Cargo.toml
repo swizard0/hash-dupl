@@ -8,6 +8,8 @@ bin-merge-pile = { git = "https://bitbucket.org/swizard/bin-merge-pile.git" }
 tokenizer = { git = "https://bitbucket.org/swizard/tokenizer.git" }
 token-ngrams = { git = "git://dev.swizard.info/token-ngrams" }
 slices-merger = { git = "git://dev.swizard.info/slices-merger" }
+serde = "*"
+rmp-serde = "*"
 time = "*"
 rand = "*"
 fnv = "*"
