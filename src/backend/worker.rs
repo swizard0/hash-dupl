@@ -162,3 +162,50 @@ fn worker_loop<B>(mut backend: B, tx: Sender<Result<Rep<B::Document>, B::Error>>
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+    use super::Worker;
+    use super::super::in_memory::InMemory;
+    use super::super::super::{Backend, SimilarityThresholdFilter, Signature, State, Config};
+
+    #[test]
+    fn save_load_state() {
+        let state = Arc::new(State::new(Config::default()));
+        let bg_backend = InMemory::<String>::new();
+        let mut backend = Worker::run(bg_backend);
+        assert_eq!(backend.load_state().unwrap(), None);
+        backend.save_state(state.clone()).unwrap();
+        assert_eq!(backend.load_state().unwrap().unwrap(), state.clone());
+    }
+
+    #[test]
+    fn insert_lookup() {
+        let bg_backend = InMemory::<String>::new();
+        let mut backend = Worker::run(bg_backend);
+        let doc_a = Arc::new("some text".to_owned());
+        let doc_b = Arc::new("some other text".to_owned());
+        backend.insert(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], }), doc_a.clone()).unwrap();
+        backend.insert(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], }), doc_b.clone()).unwrap();
+
+        let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
+                                     Box::new(SimilarityThresholdFilter(0.0)),
+                                     Vec::new()).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].similarity, 1.0);
+        assert_eq!(results[0].document, doc_a.clone());
+        let results = backend.lookup(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 500, 600, 700], }),
+                                     Box::new(SimilarityThresholdFilter(0.0)),
+                                     Vec::new()).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].similarity, 1.0);
+        assert_eq!(results[0].document, doc_b.clone());
+        let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }),
+                                     Box::new(SimilarityThresholdFilter(0.0)),
+                                     Vec::new()).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].document, doc_a.clone());
+        assert_eq!(results[1].document, doc_b.clone());
+    }
+}
