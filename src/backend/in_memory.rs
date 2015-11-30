@@ -3,7 +3,7 @@ use std::clone::Clone;
 use std::collections::HashMap;
 use std::cmp::{PartialEq, PartialOrd, Ordering};
 use slices_merger::SlicesMerger;
-use super::super::{Backend, CandidatesCollector, Signature, State, LookupError};
+use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
 
 struct DocEntry<D> {
     minhash: Box<[u64]>,
@@ -39,7 +39,7 @@ impl<D> PartialOrd for DocWithId<D> {
 pub struct InMemory<D> {
     serial: u64,
     bands_index: HashMap<u64, Vec<DocWithId<D>>>,
-    state: Option<State>,
+    state: Option<Arc<State>>,
     merger: SlicesMerger<DocWithId<D>>,
 }
 
@@ -58,21 +58,21 @@ impl<D> Backend for InMemory<D> {
     type Error = ();
     type Document = D;
 
-    fn save_state(&mut self, state: &State) -> Result<(), ()> {
+    fn save_state(&mut self, state: Arc<State>) -> Result<(), ()> {
         self.state = Some(state.clone());
         Ok(())
     }
 
-    fn load_state(&mut self) -> Result<Option<State>, ()> {
-        Ok(self.state.clone())
+    fn load_state(&mut self) -> Result<Option<Arc<State>>, ()> {
+        Ok(self.state.as_ref().map(|s| s.clone()))
     }
 
-    fn insert(&mut self, signature: Arc<Signature>, doc: D) -> Result<(), ()> {
+    fn insert(&mut self, signature: Arc<Signature>, doc: Arc<D>) -> Result<(), ()> {
         let id = self.serial;
         self.serial += 1;
         let entry = Arc::new(DocEntry {
             minhash: signature.minhash.clone().into_boxed_slice(),
-            doc: Arc::new(doc),
+            doc: doc,
         });
 
         for &band in signature.bands.iter() {
@@ -82,8 +82,8 @@ impl<D> Backend for InMemory<D> {
         Ok(())
     }
 
-    fn lookup<C, CE>(&mut self, signature: Arc<Signature>, collector: &mut C) -> Result<(), LookupError<(), CE>>
-        where C: CandidatesCollector<Error = CE, Document = D>
+    fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, mut filter: F, mut collector: C) -> Result<CR, LookupError<(), CE>>
+        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
     {
         self.merger.reset();
         for band in signature.bands.iter() {
@@ -93,12 +93,12 @@ impl<D> Backend for InMemory<D> {
         }
 
         for &DocWithId { entry: ref e, .. } in self.merger.iter() {
-            if collector.accept_minhash(&signature.minhash, &e.minhash) {
-                try!(collector.receive(&signature.minhash, &e.minhash, e.doc.clone()).map_err(|e| LookupError::Collector(e)));
+            if let Some(similarity) = filter.accept_minhash_similarity(&signature.minhash, &e.minhash) {
+                try!(collector.receive(similarity, e.doc.clone()).map_err(|e| LookupError::Collector(e)));
             }
         }
 
-        Ok(())
+        collector.finish().map_err(|e| LookupError::Collector(e))
     }
 }
 
@@ -106,39 +106,42 @@ impl<D> Backend for InMemory<D> {
 mod test {
     use std::sync::Arc;
     use super::InMemory;
-    use super::super::super::{Backend, Signature, State, Config};
+    use super::super::super::{Backend, SimilarityThresholdFilter, Signature, State, Config};
 
     #[test]
     fn save_load_state() {
-        let state = State::new(Config::default());
+        let state = Arc::new(State::new(Config::default()));
         let mut backend = InMemory::<String>::new();
         assert_eq!(backend.load_state().unwrap(), None);
-        backend.save_state(&state).unwrap();
-        assert_eq!(backend.load_state().unwrap().unwrap(), state);
+        backend.save_state(state.clone()).unwrap();
+        assert_eq!(backend.load_state().unwrap().unwrap(), state.clone());
     }
 
     #[test]
     fn insert_lookup() {
         let mut backend = InMemory::<String>::new();
-        backend.insert(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], }),
-                       "some text".to_owned()).unwrap();
-        backend.insert(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], }),
-                       "some other text".to_owned()).unwrap();
+        let doc_a = Arc::new("some text".to_owned());
+        let doc_b = Arc::new("some other text".to_owned());
+        backend.insert(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], }), doc_a.clone()).unwrap();
+        backend.insert(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], }), doc_b.clone()).unwrap();
 
-        let mut results = Vec::new();
-        backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }), &mut results).unwrap();
+        let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
+                                     SimilarityThresholdFilter(0.0),
+                                     Vec::new()).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].similarity, 1.0);
-        assert_eq!(results[0].document, Arc::new("some text".to_owned()));
-        results.clear();
-        backend.lookup(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 500, 600, 700], }), &mut results).unwrap();
+        assert_eq!(results[0].document, doc_a.clone());
+        let results = backend.lookup(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 500, 600, 700], }),
+                                     SimilarityThresholdFilter(0.0),
+                                     Vec::new()).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].similarity, 1.0);
-        assert_eq!(results[0].document, Arc::new("some other text".to_owned()));
-        results.clear();
-        backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }), &mut results).unwrap();
+        assert_eq!(results[0].document, doc_b.clone());
+        let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }),
+                                     SimilarityThresholdFilter(0.0),
+                                     Vec::new()).unwrap();
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].document, Arc::new("some text".to_owned()));
-        assert_eq!(results[1].document, Arc::new("some other text".to_owned()));
+        assert_eq!(results[0].document, doc_a.clone());
+        assert_eq!(results[1].document, doc_b.clone());
     }
 }

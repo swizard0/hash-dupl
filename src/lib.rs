@@ -41,7 +41,7 @@ pub struct Signature {
     bands: Vec<u64>,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(PartialEq, Debug)]
 pub struct State {
     config: Config,
     created_at: Timespec,
@@ -66,12 +66,54 @@ impl State {
     }
 }
 
-pub trait CandidatesCollector {
-    type Error;
-    type Document;
+pub trait CandidatesFilter {
+    fn accept_minhash_similarity(&mut self, sample_minhash: &[u64], minhash: &[u64]) -> Option<f64>;
+}
 
-    fn accept_minhash(&mut self, sample_minhash: &[u64], minhash: &[u64]) -> bool;
-    fn receive(&mut self, sample_minhash: &[u64], minhash: &[u64], doc: Arc<Self::Document>) -> Result<(), Self::Error>;
+#[derive(Clone, Copy)]
+pub struct SimilarityThresholdFilter(pub f64);
+
+impl CandidatesFilter for SimilarityThresholdFilter {
+    fn accept_minhash_similarity(&mut self, sample_minhash: &[u64], minhash: &[u64]) -> Option<f64> {
+        match minhash_distance(sample_minhash, minhash) {
+            similarity if similarity >= self.0 => Some(similarity),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct TrackBestFilter {
+    threshold: f64,
+    best: Option<f64>,
+}
+
+impl TrackBestFilter {
+    pub fn new(threshold: f64) -> TrackBestFilter {
+        TrackBestFilter {
+            threshold: threshold,
+            best: None,
+        }
+    }
+}
+
+impl CandidatesFilter for TrackBestFilter {
+    fn accept_minhash_similarity(&mut self, sample_minhash: &[u64], minhash: &[u64]) -> Option<f64> {
+        match (minhash_distance(sample_minhash, minhash), &mut self.best) {
+            (sim, _) if sim < self.threshold =>
+                None,
+            (sim, &mut Some(ref mut best_sim)) if sim > *best_sim => {
+                *best_sim = sim;
+                Some(sim)
+            },
+            (_, &mut Some(..)) =>
+                None,
+            (sim, no_best) => {
+                *no_best = Some(sim);
+                Some(sim)
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -80,22 +122,60 @@ pub struct LookupResult<D> {
     pub document: Arc<D>,
 }
 
+pub trait CandidatesCollector {
+    type Error;
+    type Document;
+    type Result;
+
+    fn receive(&mut self, similarity: f64, doc: Arc<Self::Document>) -> Result<(), Self::Error>;
+    fn finish(self) -> Result<Self::Result, Self::Error>;
+}
+
 impl<D> CandidatesCollector for Vec<LookupResult<D>> {
     type Error = ();
     type Document = D;
+    type Result = Vec<LookupResult<D>>;
 
-    fn accept_minhash(&mut self, _sample_minhash: &[u64], _minhash: &[u64]) -> bool {
-        true
-    }
-
-    fn receive(&mut self, sample_minhash: &[u64], minhash: &[u64], doc: Arc<D>) -> Result<(), ()> {
-        self.push(LookupResult {
-            similarity: minhash_distance(sample_minhash, minhash),
-            document: doc,
-        });
+    fn receive(&mut self, similarity: f64, doc: Arc<D>) -> Result<(), ()> {
+        self.push(LookupResult { similarity: similarity, document: doc, });
         Ok(())
     }
+
+    fn finish(self) -> Result<Vec<LookupResult<D>>, ()> {
+        Ok(self)
+    }
 }
+
+pub struct TrackBestCollector<D>(Option<LookupResult<D>>);
+
+impl<D> TrackBestCollector<D> {
+    pub fn new() -> TrackBestCollector<D> {
+        TrackBestCollector(None)
+    }
+}
+
+impl<D> CandidatesCollector for TrackBestCollector<D> {
+    type Error = ();
+    type Document = D;
+    type Result = Option<LookupResult<D>>;
+
+    fn receive(&mut self, similarity: f64, doc: Arc<D>) -> Result<(), ()> {
+        match &mut self.0 {
+            &mut Some(ref mut best) if similarity > best.similarity =>
+                *best = LookupResult { similarity: similarity, document: doc, },
+            &mut Some(..) =>
+                (),
+            no_best =>
+                *no_best = Some(LookupResult { similarity: similarity, document: doc, }),
+        };
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Option<LookupResult<D>>, ()> {
+        Ok(self.0)
+    }
+}
+
 
 #[derive(Debug)]
 pub enum LookupError<BE, CE> {
@@ -107,11 +187,11 @@ pub trait Backend {
     type Error;
     type Document;
 
-    fn save_state(&mut self, &State) -> Result<(), Self::Error>;
-    fn load_state(&mut self) -> Result<Option<State>, Self::Error>;
-    fn insert(&mut self, signature: Arc<Signature>, doc: Self::Document) -> Result<(), Self::Error>;
-    fn lookup<C, CE>(&mut self, signature: Arc<Signature>, collector: &mut C) -> Result<(), LookupError<Self::Error, CE>>
-        where C: CandidatesCollector<Error = CE, Document = Self::Document>;
+    fn save_state(&mut self, Arc<State>) -> Result<(), Self::Error>;
+    fn load_state(&mut self) -> Result<Option<Arc<State>>, Self::Error>;
+    fn insert(&mut self, signature: Arc<Signature>, doc: Arc<Self::Document>) -> Result<(), Self::Error>;
+    fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, collector: C) -> Result<CR, LookupError<Self::Error, CE>>
+        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = Self::Document, Result = CR>;
     fn rotate(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -255,60 +335,28 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
         Ok(Arc::new(signature))
     }
 
-    pub fn insert(&mut self, signature: Arc<Signature>, document: D) -> Result<(), Error<SE, BE>> {
+    pub fn insert(&mut self, signature: Arc<Signature>, document: Arc<D>) -> Result<(), Error<SE, BE>> {
         self.backend.insert(signature, document).map_err(|e| Error::Backend(e))
     }
 
     pub fn lookup_best(&mut self, signature: Arc<Signature>) -> Result<Option<LookupResult<D>>, Error<SE, BE>> {
-        struct BestDocFinder<D> {
-            last_sim: Option<f64>,
-            best: Option<LookupResult<D>>,
-        }
-
-        impl<D> CandidatesCollector for BestDocFinder<D> {
-            type Error = ();
-            type Document = D;
-
-            fn accept_minhash(&mut self, sample_minhash: &[u64], minhash: &[u64]) -> bool {
-                let next_best = match (minhash_distance(sample_minhash, minhash), &self.best) {
-                    (sim, &None) => Some(sim),
-                    (sim, &Some(LookupResult { similarity: best_sim, .. })) if sim > best_sim => Some(sim),
-                    _ => None,
-                };
-                self.last_sim = next_best;
-                self.last_sim.is_some()
-            }
-
-            fn receive(&mut self, _sample_minhash: &[u64], _minhash: &[u64], doc: Arc<D>) -> Result<(), ()> {
-                if let Some(sim) = self.last_sim {
-                    self.best = Some(LookupResult {
-                        similarity: sim,
-                        document: doc,
-                    });
-                }
-                Ok(())
-            }
-        }
-
-        let mut collector = BestDocFinder {
-            last_sim: None,
-            best: None,
-        };
-
-        match self.backend.lookup(signature, &mut collector) {
-            Ok(()) => Ok(collector.best),
-            Err(LookupError::Backend(e)) => Err(Error::Backend(e)),
-            Err(LookupError::Collector(())) => unreachable!(),
-        }
+        let filter = TrackBestFilter::new(self.state.config.similarity_threshold);
+        let collector = TrackBestCollector::new();
+        self.backend.lookup(signature, filter, collector)
+            .map_err(|err| match err {
+                LookupError::Backend(e) => Error::Backend(e),
+                LookupError::Collector(()) => unreachable!(),
+            })
     }
 
     pub fn lookup_all(&mut self, signature: Arc<Signature>) -> Result<Vec<LookupResult<D>>, Error<SE, BE>> {
-        let mut collector = Vec::new();
-        match self.backend.lookup(signature, &mut collector) {
-            Ok(()) => Ok(collector),
-            Err(LookupError::Backend(e)) => Err(Error::Backend(e)),
-            Err(LookupError::Collector(())) => unreachable!(),
-        }
+        let filter = SimilarityThresholdFilter(self.state.config.similarity_threshold);
+        let collector = Vec::new();
+        self.backend.lookup(signature, filter, collector)
+            .map_err(|err| match err {
+                LookupError::Backend(e) => Error::Backend(e),
+                LookupError::Collector(()) => unreachable!(),
+            })
     }
 }
 
@@ -340,34 +388,37 @@ mod test {
     fn insert_lookup_basic() {
         let mut hd = HashDupl::new(Tokens::new(), InMemory::new(), Config::default()).unwrap();
         let mut shingles = Shingles::new();
+        let doc_a = Arc::new(177);
+        let doc_b = Arc::new(277);
+
         hd.shinglify("some text to sign and check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
-        hd.insert(signature, 177).unwrap();
+        hd.insert(signature, doc_a.clone()).unwrap();
 
         hd.shinglify("then some other text to sign and maybe check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
-        hd.insert(signature, 277).unwrap();
+        hd.insert(signature, doc_b.clone()).unwrap();
 
         hd.shinglify("text to sign and check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         let found_a = hd.lookup_best(signature).unwrap().unwrap();
-        assert_eq!(found_a.document, Arc::new(177));
+        assert_eq!(found_a.document, doc_a.clone());
 
         hd.shinglify("some other text to sign and", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         let found_b = hd.lookup_best(signature).unwrap().unwrap();
-        assert_eq!(found_b.document, Arc::new(277));
+        assert_eq!(found_b.document, doc_b.clone());
 
         hd.shinglify("some text to sign and check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         let mut found_all = hd.lookup_all(signature).unwrap();
         found_all.sort_by(|a, b| a.document.cmp(&b.document));
         match found_all.get(0) {
-            Some(&LookupResult { similarity: sim, document: ref doc, }) if sim > 0.99 && doc == &Arc::new(177) => (),
+            Some(&LookupResult { similarity: sim, document: ref doc, }) if sim > 0.99 && doc == &doc_a => (),
             other => panic!("unexpected result 0: {:?}", other),
         }
         match found_all.get(1) {
-            Some(&LookupResult { similarity: sim, document: ref doc, }) if sim > 0.25 && doc == &Arc::new(277) => (),
+            Some(&LookupResult { similarity: sim, document: ref doc, }) if sim > 0.25 && doc == &doc_b => (),
             other => panic!("unexpected result 1: {:?}", other),
         }
     }
