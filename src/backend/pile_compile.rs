@@ -241,6 +241,7 @@ mod test {
             let mut both_offsets: Vec<_> = checker.lookup(&300).unwrap().unwrap().offsets.as_ref().unwrap().iter().cloned().collect();
             both_offsets.sort();
             assert_eq!(both_offsets, vec![doc_a_offsets, doc_b_offsets]);
+
             let mut docs_file = fs::File::open("/tmp/pile_compile_b/docs.bin").unwrap();
             docs_file.seek(SeekFrom::Start(doc_a_offsets.doc_offset)).unwrap();
             let restored_doc_a: Arc<String> = Deserialize::deserialize(&mut Deserializer::new(&mut docs_file)).unwrap();
@@ -248,6 +249,14 @@ mod test {
             docs_file.seek(SeekFrom::Start(doc_b_offsets.doc_offset)).unwrap();
             let restored_doc_b: Arc<String> = Deserialize::deserialize(&mut Deserializer::new(&mut docs_file)).unwrap();
             assert_eq!(restored_doc_b, doc_b);
+
+            let mut minhash_file = fs::File::open("/tmp/pile_compile_b/minhash.bin").unwrap();
+            minhash_file.seek(SeekFrom::Start(doc_a_offsets.minhash_offset)).unwrap();
+            let restored_minhash_a: Vec<u64> = Deserialize::deserialize(&mut Deserializer::new(&mut minhash_file)).unwrap();
+            assert_eq!(restored_minhash_a, vec![1, 2, 3]);
+            minhash_file.seek(SeekFrom::Start(doc_b_offsets.minhash_offset)).unwrap();
+            let restored_minhash_b: Vec<u64> = Deserialize::deserialize(&mut Deserializer::new(&mut minhash_file)).unwrap();
+            assert_eq!(restored_minhash_b, vec![4, 5, 6]);
         }
     }
 }
