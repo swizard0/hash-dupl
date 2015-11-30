@@ -45,7 +45,10 @@ impl<B> Worker<B> where B: Backend + Send + 'static, B::Document: Send + Sync, B
         let (master_tx, slave_rx) = channel();
         let (slave_tx, master_rx) = channel();
         let slave = Builder::new().name("hash dupl backend worker".to_owned())
-            .spawn(move || worker_loop(backend, slave_tx, slave_rx).unwrap()).unwrap();
+            .spawn(move || {
+                worker_loop(backend, &slave_tx, &slave_rx).unwrap();
+                slave_tx.send(Ok(Rep::TerminateAck)).unwrap();
+            }).unwrap();
         Worker {
             tx: master_tx,
             rx: master_rx,
@@ -120,7 +123,7 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
 
 }
 
-fn worker_loop<B>(mut backend: B, tx: Sender<Result<Rep<B::Document>, B::Error>>, rx: Receiver<Req<B::Document>>) -> Result<(), B::Error>
+fn worker_loop<B>(mut backend: B, tx: &Sender<Result<Rep<B::Document>, B::Error>>, rx: &Receiver<Req<B::Document>>) -> Result<(), B::Error>
     where B: Backend
 {
     loop {
@@ -155,10 +158,8 @@ fn worker_loop<B>(mut backend: B, tx: Sender<Result<Rep<B::Document>, B::Error>>
             }
             Req::Rotate =>
                 tx.send(backend.rotate().map(|()| Rep::Ok)).unwrap(),
-            Req::Terminate => {
-                tx.send(Ok(Rep::TerminateAck)).unwrap();
-                return Ok(())
-            },
+            Req::Terminate =>
+                return Ok(()),
         }
     }
 }
