@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::marker::PhantomData;
 use std::cmp::{PartialEq, PartialOrd, Ordering};
 use time::Timespec;
@@ -6,10 +7,34 @@ use bin_merge_pile::reduce::Reducer;
 use slices_merger::SlicesMerger;
 use super::super::{Config, State};
 
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Debug)]
+pub struct Offset {
+    pub minhash_offset: u64,
+    pub doc_offset: u64,
+}
+
 #[derive(Debug)]
 pub struct BandEntry {
     pub band: u64,
-    pub docs: Option<Vec<u64>>,
+    pub offsets: Option<Vec<Offset>>,
+}
+
+impl Borrow<u64> for BandEntry {
+    fn borrow(&self) -> &u64 {
+        &self.band
+    }
+}
+
+impl BandEntry {
+    pub fn entry(band: u64, minhash_offset: u64, doc_offset: u64) -> BandEntry {
+        BandEntry {
+            band: band,
+            offsets: Some(vec![Offset {
+                minhash_offset: minhash_offset,
+                doc_offset: doc_offset,
+            }]),
+        }
+    }
 }
 
 impl PartialEq for BandEntry {
@@ -24,16 +49,37 @@ impl PartialOrd for BandEntry {
     }
 }
 
+impl Serialize for Offset {
+    fn serialize<S>(&self, serializer: &mut S) -> Result<(), S::Error> where S: Serializer {
+        try!(self.minhash_offset.serialize(serializer));
+        try!(self.doc_offset.serialize(serializer));
+        Ok(())
+    }
+}
+
 impl Serialize for BandEntry {
     fn serialize<S>(&self, serializer: &mut S) -> Result<(), S::Error> where S: Serializer {
-        (self.band, &self.docs).serialize(serializer)
+        try!(self.band.serialize(serializer));
+        try!(self.offsets.serialize(serializer));
+        Ok(())
+    }
+}
+
+impl Deserialize for Offset {
+    fn deserialize<D>(deserializer: &mut D) -> Result<Offset, D::Error> where D: Deserializer {
+        Ok(Offset {
+            minhash_offset: try!(Deserialize::deserialize(deserializer)),
+            doc_offset: try!(Deserialize::deserialize(deserializer)),
+        })
     }
 }
 
 impl Deserialize for BandEntry {
     fn deserialize<D>(deserializer: &mut D) -> Result<BandEntry, D::Error> where D: Deserializer {
-        let (band, docs) = try!(Deserialize::deserialize(deserializer));
-        Ok(BandEntry { band: band, docs: docs, })
+        Ok(BandEntry {
+            band: try!(Deserialize::deserialize(deserializer)),
+            offsets: try!(Deserialize::deserialize(deserializer)),
+        })
     }
 }
 
@@ -95,17 +141,17 @@ impl<E> BandEntriesReducer<E> {
 
 impl<E> Reducer<BandEntry, E> for BandEntriesReducer<E> where E: Send + Sync + 'static {
     fn reduce(&self, existing: &mut BandEntry, incoming: BandEntry) -> Result<(), E> {
-        existing.docs =
-            match (existing.docs.take(), incoming.docs) {
-                (Some(e_docs), Some(i_docs)) => {
-                    let mut merger = SlicesMerger::from(i_docs);
-                    merger.add(&e_docs);
+        existing.offsets =
+            match (existing.offsets.take(), incoming.offsets) {
+                (Some(e_offsets), Some(i_offsets)) => {
+                    let mut merger = SlicesMerger::from(i_offsets);
+                    merger.add(&e_offsets);
                     Some(merger.finish())
                 },
-                (Some(e_docs), None) =>
-                    Some(e_docs),
-                (None, Some(i_docs)) =>
-                    Some(i_docs),
+                (Some(e_offsets), None) =>
+                    Some(e_offsets),
+                (None, Some(i_offsets)) =>
+                    Some(i_offsets),
                 (None, None) =>
                     None,
             };

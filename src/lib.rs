@@ -399,25 +399,25 @@ mod test {
         let doc_a = Arc::new(177);
         let doc_b = Arc::new(277);
 
-        hd.shinglify("some useful text to sign and check", &mut shingles).unwrap();
+        hd.shinglify("here is some useful text to sign and check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         hd.insert(signature, doc_a.clone()).unwrap();
 
-        hd.shinglify("then some other useful text to sign and maybe check", &mut shingles).unwrap();
+        hd.shinglify("then here is some other useful text to sign and maybe check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         hd.insert(signature, doc_b.clone()).unwrap();
 
-        hd.shinglify("useful text to sign and check", &mut shingles).unwrap();
+        hd.shinglify("is useful text to sign and check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         let found_a = hd.lookup_best(signature).unwrap().unwrap();
         assert_eq!(found_a.document, doc_a.clone());
 
-        hd.shinglify("some other useful text to sign and", &mut shingles).unwrap();
+        hd.shinglify("is some other useful text to sign and", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         let found_b = hd.lookup_best(signature).unwrap().unwrap();
         assert_eq!(found_b.document, doc_b.clone());
 
-        hd.shinglify("some useful text to sign and check", &mut shingles).unwrap();
+        hd.shinglify("here is some useful text to sign and check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         let mut found_all = hd.lookup_all(signature).unwrap();
         found_all.sort_by(|a, b| a.document.cmp(&b.document));
