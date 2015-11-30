@@ -75,7 +75,19 @@ impl<D> Backend for PileRw<D> where D: Serialize + Deserialize + Send + Sync + '
     }
 
     fn insert(&mut self, signature: Arc<Signature>, doc: Arc<D>) -> Result<(), Error> {
-        Err(Error::UnsupportedForCurrentMode)
+        match self.state {
+            RunState::Invalid =>
+                unreachable!(),
+            RunState::Filling { in_memory: ref mut mem_backend, compile: ref mut pile_backend } => {
+                try!(mem_backend.insert(signature.clone(), doc.clone()).map_err(|_| Error::InMemory));
+                try!(pile_backend.insert(signature, doc).map_err(|e| Error::PileCompile(e)));
+                Ok(())
+            },
+            RunState::Freezing { .. } =>
+                Err(Error::UnsupportedForCurrentMode),
+            RunState::Freezed { .. } =>
+                Err(Error::UnsupportedForCurrentMode),
+        }
     }
 
     fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, collector: C) -> Result<CR, LookupError<Error, CE>>
