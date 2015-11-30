@@ -4,7 +4,8 @@ use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::thread::{Builder, JoinHandle};
 use std::sync::mpsc::{channel, Sender, Receiver};
-use bin_merge_pile::{merge, reduce, ntree_bkd};
+use bin_merge_pile::{merge, reduce, ntree, ntree_bkd};
+use bin_merge_pile::ntree::NTreeWriter;
 use bin_merge_pile::bkd::{file, file_cache};
 use serde::Serialize;
 use rmp_serde;
@@ -23,19 +24,25 @@ enum IndexCommand<D> {
 }
 
 pub struct PileCompile<D> {
+    state_filename: PathBuf,
     tx: Sender<IndexCommand<D>>,
     rx: Receiver<()>,
-    slave: JoinHandle<()>,
+    slave: Option<JoinHandle<()>>,
 }
 
 #[derive(Debug)]
 pub enum Error {
-    RemoveDatabaseDir(PathBuf),
-    CreateDatabaseDir(PathBuf),
-    CreateDocsFile(PathBuf),
+    RemoveDatabaseDir(PathBuf, io::Error),
+    CreateDatabaseDir(PathBuf, io::Error),
+    CreateDocsFile(PathBuf, io::Error),
     SeekDocsFile(io::Error),
+    CreateStateFile(PathBuf, io::Error),
     CreateBandsFile(ntree_bkd::file::Error),
     TapeAdd(file::Error),
+    TapeFinish(file::Error),
+    TapeIter(file::Error),
+    NTreeBuild(ntree_bkd::file::Error),
+    SerializeState(rmp_serde::encode::Error),
     SerializeDoc(rmp_serde::encode::Error),
     ReadUnsupported,
 }
@@ -48,13 +55,13 @@ impl<D> PileCompile<D> where D: Serialize + Send + Sync + 'static {
         match fs::remove_dir_all(&database_dir) {
             Ok(()) => (),
             Err(ref e) if e.kind() == io::ErrorKind::NotFound => (),
-            Err(_) => return Err(Error::RemoveDatabaseDir(base_dir)),
+            Err(e) => return Err(Error::RemoveDatabaseDir(base_dir, e)),
         }
 
-        try!(fs::create_dir(&database_dir).map_err(|_| Error::CreateDatabaseDir(base_dir.clone())));
+        try!(fs::create_dir(&database_dir).map_err(|e| Error::CreateDatabaseDir(base_dir.clone(), e)));
         let mut docs_filename = base_dir.clone();
         docs_filename.push("docs.bin");
-        let docs_file = try!(fs::File::create(&docs_filename).map_err(|_| Error::CreateDocsFile(docs_filename)));
+        let docs_file = try!(fs::File::create(&docs_filename).map_err(|e| Error::CreateDocsFile(docs_filename, e)));
 
         let mut index_filename = base_dir.clone();
         index_filename.push("bands.bin");
@@ -66,21 +73,64 @@ impl<D> PileCompile<D> where D: Serialize + Send + Sync + 'static {
                 BandEntriesReducer::new()),
             params.parallel_config);
 
+        let mut state_filename = base_dir.clone();
+        state_filename.push("state.bin");
+
         let (master_tx, slave_rx) = channel();
         let (slave_tx, master_rx) = channel();
         let slave = Builder::new().name("pile_compile indexer".to_owned())
-            .spawn(move || indexer_loop(index_tape, index_ntree, docs_file, slave_tx, slave_rx).unwrap()).unwrap();
+            .spawn(move || indexer_loop(index_tape, index_ntree, params.min_tree_height, docs_file, slave_tx, slave_rx).unwrap()).unwrap();
 
         Ok(PileCompile {
+            state_filename: state_filename,
             tx: master_tx,
             rx: master_rx,
-            slave: slave,
+            slave: Some(slave),
         })
     }
 }
 
+impl<D> Drop for PileCompile<D> {
+    fn drop(&mut self) {
+        if let Some(slave) = self.slave.take() {
+            self.tx.send(IndexCommand::Finish).unwrap();
+            match self.rx.recv() {
+                Ok(()) => slave.join().unwrap(),
+                other => panic!("unexpected rep while joining pile_compile indexer: {:?}", other),
+            }
+        }
+    }
+}
+
+impl<D> Backend for PileCompile<D> {
+    type Error = Error;
+    type Document = D;
+
+    fn save_state(&mut self, state: Arc<State>) -> Result<(), Error> {
+        let mut state_file = try!(fs::File::create(&self.state_filename).map_err(|e| Error::CreateStateFile(self.state_filename.clone(), e)));
+        state.serialize(&mut rmp_serde::Serializer::new(&mut state_file)).map_err(|e| Error::SerializeState(e))
+    }
+
+    fn load_state(&mut self) -> Result<Option<Arc<State>>, Error> {
+        Err(Error::ReadUnsupported)
+    }
+
+    fn insert(&mut self, signature: Arc<Signature>, doc: Arc<D>) -> Result<(), Error> {
+        self.tx.send(IndexCommand::Insert(signature, doc)).unwrap();
+        Ok(())
+    }
+
+    fn lookup<F, C, CR, CE>(&mut self, _signature: Arc<Signature>, _filter: F, _collector: C) -> Result<CR, LookupError<Error, CE>>
+        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
+    {
+        Err(LookupError::Backend(Error::ReadUnsupported))
+    }
+}
+
+
 fn indexer_loop<D, PC>(mut index_tape: merge::BinMergeTape<PC>,
-                       mut index_ntree: ntree_bkd::file::FileWriter<BandEntry>,
+                       index_ntree: ntree_bkd::file::FileWriter<BandEntry>,
+                       min_tree_height: usize,
                        docs_file: fs::File,
                        tx: Sender<()>,
                        rx: Receiver<IndexCommand<D>>) -> Result<(), Error>
@@ -93,12 +143,90 @@ fn indexer_loop<D, PC>(mut index_tape: merge::BinMergeTape<PC>,
                 let doc_offset = try!(docs_file_writer.seek(SeekFrom::Current(0)).map_err(|e| Error::SeekDocsFile(e)));
                 try!(document.serialize(&mut rmp_serde::Serializer::new(&mut docs_file_writer)).map_err(|e| Error::SerializeDoc(e)));
                 for &band in signature.bands.iter() {
-                    try!(index_tape.add(BandEntry { band: band, docs: vec![doc_offset], }).map_err(|e| Error::TapeAdd(e)))
+                    try!(index_tape.add(BandEntry { band: band, docs: Some(vec![doc_offset]), }).map_err(|e| Error::TapeAdd(e)))
                 }
             },
             IndexCommand::Finish => {
+                try!(match try!(index_tape.finish().map_err(|e| Error::TapeFinish(e))) {
+                    Some((index_iter, index_len)) =>
+                        index_ntree.build(index_iter, index_len, min_tree_height),
+                    None =>
+                        index_ntree.build(None.into_iter(), 0, min_tree_height),
+                }.map_err(|err| match err {
+                    ntree::BuildError::Iter(e) => Error::TapeIter(e),
+                    ntree::BuildError::NTree(e) => Error::NTreeBuild(e),
+                }));
+                tx.send(()).unwrap();
                 return Ok(())
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::fs;
+    use std::sync::Arc;
+    use std::io::{Seek, SeekFrom};
+    use serde::Deserialize;
+    use rmp_serde::Deserializer;
+    use bin_merge_pile::ntree_bkd;
+    use bin_merge_pile::ntree::NTreeReader;
+    use bin_merge_pile::merge::ParallelConfig;
+    use super::{Params, PileCompile, Error};
+    use super::super::pile_common::BandEntry;
+    use super::super::super::{Backend, State, Config, Signature};
+
+    #[test]
+    fn save_check_state() {
+        let state = Arc::new(State::new(Config::default()));
+        {
+            let mut backend = PileCompile::<String>::new("/tmp/pile_compile_a", Params {
+                min_tree_height: 122,
+                memory_limit_power: 13,
+                parallel_config: ParallelConfig::SingleThread,
+            }).unwrap();
+
+            match backend.load_state() { Err(Error::ReadUnsupported) => (), other => panic!("unexpected resut: {:?}", other), }
+            backend.save_state(state.clone()).unwrap();
+        }
+        {
+            let mut state_file = fs::File::open("/tmp/pile_compile_a/state.bin").unwrap();
+            let mut deserializer = Deserializer::new(&mut state_file);
+            let state_read = Deserialize::deserialize(&mut deserializer).unwrap();
+            assert_eq!(state, state_read);
+        }
+    }
+
+    #[test]
+    fn insert_check() {
+        let doc_a = Arc::new("some text".to_owned());
+        let doc_b = Arc::new("some other text".to_owned());
+        {
+            let mut backend = PileCompile::<String>::new("/tmp/pile_compile_b", Params {
+                min_tree_height: 122,
+                memory_limit_power: 13,
+                parallel_config: ParallelConfig::SingleThread,
+            }).unwrap();
+            backend.insert(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], }), doc_a.clone()).unwrap();
+            backend.insert(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], }), doc_b.clone()).unwrap();
+        }
+        {
+            let mut checker = ntree_bkd::file::FileReader::new("/tmp/pile_compile_b/bands.bin").unwrap();
+            let &doc_a_offset = checker.lookup(&BandEntry { band: 100, docs: None, }).unwrap().unwrap().docs.as_ref().unwrap().get(0).unwrap();
+            let &doc_b_offset = checker.lookup(&BandEntry { band: 200, docs: None, }).unwrap().unwrap().docs.as_ref().unwrap().get(0).unwrap();
+            let mut both_offsets: Vec<_> = checker
+                .lookup(&BandEntry { band: 300, docs: None, })
+                .unwrap().unwrap().docs.as_ref().unwrap().iter().cloned().collect();
+            both_offsets.sort();
+            assert_eq!(both_offsets, vec![doc_a_offset, doc_b_offset]);
+            let mut docs_file = fs::File::open("/tmp/pile_compile_b/docs.bin").unwrap();
+            docs_file.seek(SeekFrom::Start(doc_a_offset)).unwrap();
+            let restored_doc_a: Arc<String> = Deserialize::deserialize(&mut Deserializer::new(&mut docs_file)).unwrap();
+            assert_eq!(restored_doc_a, doc_a);
+            docs_file.seek(SeekFrom::Start(doc_b_offset)).unwrap();
+            let restored_doc_b: Arc<String> = Deserialize::deserialize(&mut Deserializer::new(&mut docs_file)).unwrap();
+            assert_eq!(restored_doc_b, doc_b);
         }
     }
 }

@@ -6,9 +6,10 @@ use bin_merge_pile::reduce::Reducer;
 use slices_merger::SlicesMerger;
 use super::super::{Config, State};
 
+#[derive(Debug)]
 pub struct BandEntry {
     pub band: u64,
-    pub docs: Vec<u64>,
+    pub docs: Option<Vec<u64>>,
 }
 
 impl PartialEq for BandEntry {
@@ -94,9 +95,20 @@ impl<E> BandEntriesReducer<E> {
 
 impl<E> Reducer<BandEntry, E> for BandEntriesReducer<E> where E: Send + Sync + 'static {
     fn reduce(&self, existing: &mut BandEntry, incoming: BandEntry) -> Result<(), E> {
-        let mut merger = SlicesMerger::from(incoming.docs);
-        merger.add(&existing.docs);
-        existing.docs = merger.finish();
+        existing.docs =
+            match (existing.docs.take(), incoming.docs) {
+                (Some(e_docs), Some(i_docs)) => {
+                    let mut merger = SlicesMerger::from(i_docs);
+                    merger.add(&e_docs);
+                    Some(merger.finish())
+                },
+                (Some(e_docs), None) =>
+                    Some(e_docs),
+                (None, Some(i_docs)) =>
+                    Some(i_docs),
+                (None, None) =>
+                    None,
+            };
         Ok(())
     }
 }
