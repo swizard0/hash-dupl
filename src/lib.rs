@@ -66,7 +66,7 @@ impl State {
     }
 }
 
-pub trait CandidatesFilter {
+pub trait CandidatesFilter: Send + Sync + 'static {
     fn accept_minhash_similarity(&mut self, sample_minhash: &[u64], minhash: &[u64]) -> Option<f64>;
 }
 
@@ -187,11 +187,11 @@ pub trait Backend {
     type Error;
     type Document;
 
-    fn save_state(&mut self, Arc<State>) -> Result<(), Self::Error>;
+    fn save_state(&mut self, state: Arc<State>) -> Result<(), Self::Error>;
     fn load_state(&mut self) -> Result<Option<Arc<State>>, Self::Error>;
     fn insert(&mut self, signature: Arc<Signature>, doc: Arc<Self::Document>) -> Result<(), Self::Error>;
-    fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, collector: C) -> Result<CR, LookupError<Self::Error, CE>>
-        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = Self::Document, Result = CR>;
+    fn lookup<C, CR, CE>(&mut self, signature: Arc<Signature>, filter: Box<CandidatesFilter>, collector: C) -> Result<CR, LookupError<Self::Error, CE>>
+        where C: CandidatesCollector<Error = CE, Document = Self::Document, Result = CR>;
     fn rotate(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -340,7 +340,7 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
     }
 
     pub fn lookup_best(&mut self, signature: Arc<Signature>) -> Result<Option<LookupResult<D>>, Error<SE, BE>> {
-        let filter = TrackBestFilter::new(self.state.config.similarity_threshold);
+        let filter = Box::new(TrackBestFilter::new(self.state.config.similarity_threshold));
         let collector = TrackBestCollector::new();
         self.backend.lookup(signature, filter, collector)
             .map_err(|err| match err {
@@ -350,7 +350,7 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
     }
 
     pub fn lookup_all(&mut self, signature: Arc<Signature>) -> Result<Vec<LookupResult<D>>, Error<SE, BE>> {
-        let filter = SimilarityThresholdFilter(self.state.config.similarity_threshold);
+        let filter = Box::new(SimilarityThresholdFilter(self.state.config.similarity_threshold));
         let collector = Vec::new();
         self.backend.lookup(signature, filter, collector)
             .map_err(|err| match err {
@@ -391,25 +391,25 @@ mod test {
         let doc_a = Arc::new(177);
         let doc_b = Arc::new(277);
 
-        hd.shinglify("some text to sign and check", &mut shingles).unwrap();
+        hd.shinglify("some useful text to sign and check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         hd.insert(signature, doc_a.clone()).unwrap();
 
-        hd.shinglify("then some other text to sign and maybe check", &mut shingles).unwrap();
+        hd.shinglify("then some other useful text to sign and maybe check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         hd.insert(signature, doc_b.clone()).unwrap();
 
-        hd.shinglify("text to sign and check", &mut shingles).unwrap();
+        hd.shinglify("useful text to sign and check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         let found_a = hd.lookup_best(signature).unwrap().unwrap();
         assert_eq!(found_a.document, doc_a.clone());
 
-        hd.shinglify("some other text to sign and", &mut shingles).unwrap();
+        hd.shinglify("some other useful text to sign and", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         let found_b = hd.lookup_best(signature).unwrap().unwrap();
         assert_eq!(found_b.document, doc_b.clone());
 
-        hd.shinglify("some text to sign and check", &mut shingles).unwrap();
+        hd.shinglify("some useful text to sign and check", &mut shingles).unwrap();
         let signature = hd.sign(&shingles).unwrap();
         let mut found_all = hd.lookup_all(signature).unwrap();
         found_all.sort_by(|a, b| a.document.cmp(&b.document));
@@ -418,7 +418,7 @@ mod test {
             other => panic!("unexpected result 0: {:?}", other),
         }
         match found_all.get(1) {
-            Some(&LookupResult { similarity: sim, document: ref doc, }) if sim > 0.25 && doc == &doc_b => (),
+            Some(&LookupResult { similarity: sim, document: ref doc, }) if sim >= 0.4 && doc == &doc_b => (),
             other => panic!("unexpected result 1: {:?}", other),
         }
     }

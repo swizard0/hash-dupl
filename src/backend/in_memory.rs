@@ -82,8 +82,8 @@ impl<D> Backend for InMemory<D> {
         Ok(())
     }
 
-    fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, mut filter: F, mut collector: C) -> Result<CR, LookupError<(), CE>>
-        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
+    fn lookup<C, CR, CE>(&mut self, signature: Arc<Signature>, mut filter: Box<CandidatesFilter>, mut collector: C) -> Result<CR, LookupError<(), CE>>
+        where C: CandidatesCollector<Error = CE, Document = D, Result = CR>
     {
         self.merger.reset();
         for band in signature.bands.iter() {
@@ -126,19 +126,19 @@ mod test {
         backend.insert(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], }), doc_b.clone()).unwrap();
 
         let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
-                                     SimilarityThresholdFilter(0.0),
+                                     Box::new(SimilarityThresholdFilter(0.0)),
                                      Vec::new()).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].similarity, 1.0);
         assert_eq!(results[0].document, doc_a.clone());
         let results = backend.lookup(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 500, 600, 700], }),
-                                     SimilarityThresholdFilter(0.0),
+                                     Box::new(SimilarityThresholdFilter(0.0)),
                                      Vec::new()).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].similarity, 1.0);
         assert_eq!(results[0].document, doc_b.clone());
         let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }),
-                                     SimilarityThresholdFilter(0.0),
+                                     Box::new(SimilarityThresholdFilter(0.0)),
                                      Vec::new()).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].document, doc_a.clone());
