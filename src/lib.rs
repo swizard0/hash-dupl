@@ -66,8 +66,14 @@ impl State {
     }
 }
 
-pub trait CandidatesFilter: Send + Sync + 'static {
+pub trait CandidatesFilter: Send + 'static {
     fn accept_minhash_similarity(&mut self, sample_minhash: &[u64], minhash: &[u64]) -> Option<f64>;
+}
+
+impl<T: ?Sized> CandidatesFilter for Box<T> where T: CandidatesFilter {
+    fn accept_minhash_similarity(&mut self, sample_minhash: &[u64], minhash: &[u64]) -> Option<f64> {
+        (**self).accept_minhash_similarity(sample_minhash, minhash)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -190,8 +196,8 @@ pub trait Backend {
     fn save_state(&mut self, state: Arc<State>) -> Result<(), Self::Error>;
     fn load_state(&mut self) -> Result<Option<Arc<State>>, Self::Error>;
     fn insert(&mut self, signature: Arc<Signature>, doc: Arc<Self::Document>) -> Result<(), Self::Error>;
-    fn lookup<C, CR, CE>(&mut self, signature: Arc<Signature>, filter: Box<CandidatesFilter>, collector: C) -> Result<CR, LookupError<Self::Error, CE>>
-        where C: CandidatesCollector<Error = CE, Document = Self::Document, Result = CR>;
+    fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, collector: C) -> Result<CR, LookupError<Self::Error, CE>>
+        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = Self::Document, Result = CR>;
     fn rotate(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }

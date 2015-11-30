@@ -82,8 +82,8 @@ impl<D> Backend for InMemory<D> {
         Ok(())
     }
 
-    fn lookup<C, CR, CE>(&mut self, signature: Arc<Signature>, mut filter: Box<CandidatesFilter>, mut collector: C) -> Result<CR, LookupError<(), CE>>
-        where C: CandidatesCollector<Error = CE, Document = D, Result = CR>
+    fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, mut filter: F, mut collector: C) -> Result<CR, LookupError<(), CE>>
+        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
     {
         self.merger.reset();
         for band in signature.bands.iter() {

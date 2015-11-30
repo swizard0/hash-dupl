@@ -94,10 +94,10 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
         }
     }
 
-    fn lookup<C, CR, CE>(&mut self, signature: Arc<Signature>, filter: Box<CandidatesFilter>, mut collector: C) -> Result<CR, LookupError<B::Error, CE>>
-        where C: CandidatesCollector<Error = CE, Document = B::Document, Result = CR>
+    fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, mut collector: C) -> Result<CR, LookupError<B::Error, CE>>
+        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = B::Document, Result = CR>
     {
-        self.tx.send(Req::Lookup(signature, filter)).unwrap();
+        self.tx.send(Req::Lookup(signature, Box::new(filter))).unwrap();
         loop {
             match self.rx.recv() {
                 Ok(Ok(Rep::LookupResult(similarity, doc))) =>
