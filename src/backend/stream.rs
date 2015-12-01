@@ -10,6 +10,12 @@ use super::worker::{Worker, Req, Rep};
 use super::{pile_rw, pile_lookup, pile_compile};
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
 
+#[derive(Clone, Copy)]
+pub struct Params {
+    compile_params: pile_compile::Params,
+    windows_count: usize,
+}
+
 #[derive(Debug)]
 pub enum Error {
     WindowsDatabaseNotADir(PathBuf),
@@ -61,13 +67,13 @@ pub struct Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
     windows_dir: PathBuf,
     windows: Vec<Window<D>>,
     rw_window: Option<InnerWindow<Worker<pile_rw::PileRw<D>, Error>>>,
-    compile_params: pile_compile::Params,
+    params: Params,
     lookup_tx: Sender<Result<Rep<D>, Error>>,
     lookup_rx: Receiver<Result<Rep<D>, Error>>,
 }
 
 impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
-    pub fn new<P>(windows_dir: P, compile_params: pile_compile::Params) -> Result<Stream<D>, Error> where P: AsRef<Path> {
+    pub fn new<P>(windows_dir: P, params: Params) -> Result<Stream<D>, Error> where P: AsRef<Path> {
         let mut base_dir = PathBuf::new();
         base_dir.push(&windows_dir);
 
@@ -118,7 +124,7 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
             windows_dir: base_dir,
             windows: windows,
             rw_window: None,
-            compile_params: compile_params,
+            params: params,
             lookup_tx: worker_tx,
             lookup_rx: stream_rx,
         };
@@ -161,7 +167,7 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
             index += 1;
         }
 
-        let mut pile_rw = try!(pile_rw::PileRw::new(&database_dir, self.compile_params.clone()));
+        let mut pile_rw = try!(pile_rw::PileRw::new(&database_dir, self.params.compile_params.clone()));
         if let Some(state) = common_state.take() {
             try!(pile_rw.save_state(state.clone()));
             if self.state.is_none() {
@@ -269,8 +275,8 @@ mod test {
     use std::fs;
     use std::sync::Arc;
     use bin_merge_pile::merge::ParallelConfig;
-    use super::Stream;
-    use super::super::pile_compile::Params;
+    use super::{Params, Stream};
+    use super::super::pile_compile;
     use super::super::super::{Backend, SimilarityThresholdFilter, Signature, State, Config};
 
     #[test]
@@ -278,10 +284,13 @@ mod test {
         let _ = fs::remove_dir_all("/tmp/stream_a");
         let state = Arc::new(State::new(Config::default()));
         let mut backend = Stream::<String>::new("/tmp/stream_a", Params {
-            min_tree_height: 1,
-            max_block_size: 32,
-            memory_limit_power: 13,
-            parallel_config: ParallelConfig::SingleThread,
+            compile_params: pile_compile::Params {
+                min_tree_height: 1,
+                max_block_size: 32,
+                memory_limit_power: 13,
+                parallel_config: ParallelConfig::SingleThread,
+            },
+            windows_count: 3,
         }).unwrap();
         assert_eq!(backend.load_state().unwrap(), None);
         backend.save_state(state.clone()).unwrap();
@@ -292,13 +301,17 @@ mod test {
     fn insert_lookup_rotate() {
         let doc_a = Arc::new("some text".to_owned());
         let doc_b = Arc::new("some other text".to_owned());
+        let doc_c = Arc::new("and finally not a text at all".to_owned());
         {
             let _ = fs::remove_dir_all("/tmp/stream_b");
             let mut backend = Stream::<String>::new("/tmp/stream_b", Params {
-                min_tree_height: 1,
-                max_block_size: 32,
-                memory_limit_power: 13,
-                parallel_config: ParallelConfig::SingleThread,
+                compile_params: pile_compile::Params {
+                    min_tree_height: 1,
+                    max_block_size: 32,
+                    memory_limit_power: 13,
+                    parallel_config: ParallelConfig::SingleThread,
+                },
+                windows_count: 3,
             }).unwrap();
             backend.save_state(Arc::new(State::new(Config::default()))).unwrap();
             backend.insert(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], }), doc_a.clone()).unwrap();
@@ -324,6 +337,7 @@ mod test {
             assert_eq!(results[1].document, doc_b.clone());
 
             backend.rotate().unwrap();
+            backend.insert(Arc::new(Signature { minhash: vec![7, 8, 9], bands: vec![300, 800, 900], }), doc_c.clone()).unwrap();
 
             let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
                                          Box::new(SimilarityThresholdFilter(0.0)),
@@ -337,19 +351,30 @@ mod test {
             assert_eq!(results.len(), 1);
             assert_eq!(results[0].similarity, 1.0);
             assert_eq!(results[0].document, doc_b.clone());
-            let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }),
+            let mut results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }),
+                                             Box::new(SimilarityThresholdFilter(0.0)),
+                                             Vec::new()).unwrap();
+            assert_eq!(results.len(), 3);
+            results.sort_by(|a, b| a.document.cmp(&b.document));
+            assert_eq!(results[0].document, doc_c.clone());
+            assert_eq!(results[1].document, doc_b.clone());
+            assert_eq!(results[2].document, doc_a.clone());
+            let results = backend.lookup(Arc::new(Signature { minhash: vec![7, 8, 9], bands: vec![800, 900], }),
                                          Box::new(SimilarityThresholdFilter(0.0)),
                                          Vec::new()).unwrap();
-            assert_eq!(results.len(), 2);
-            assert_eq!(results[0].document, doc_a.clone());
-            assert_eq!(results[1].document, doc_b.clone());
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].similarity, 1.0);
+            assert_eq!(results[0].document, doc_c.clone());
         }
         {
             let mut backend = Stream::<String>::new("/tmp/stream_b", Params {
-                min_tree_height: 1,
-                max_block_size: 32,
-                memory_limit_power: 13,
-                parallel_config: ParallelConfig::SingleThread,
+                compile_params: pile_compile::Params {
+                    min_tree_height: 1,
+                    max_block_size: 32,
+                    memory_limit_power: 13,
+                    parallel_config: ParallelConfig::SingleThread,
+                },
+                windows_count: 3,
             }).unwrap();
             let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
                                          Box::new(SimilarityThresholdFilter(0.0)),
@@ -363,12 +388,14 @@ mod test {
             assert_eq!(results.len(), 1);
             assert_eq!(results[0].similarity, 1.0);
             assert_eq!(results[0].document, doc_b.clone());
-            let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }),
-                                         Box::new(SimilarityThresholdFilter(0.0)),
-                                         Vec::new()).unwrap();
-            assert_eq!(results.len(), 2);
-            assert_eq!(results[0].document, doc_a.clone());
+            let mut results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }),
+                                             Box::new(SimilarityThresholdFilter(0.0)),
+                                             Vec::new()).unwrap();
+            assert_eq!(results.len(), 3);
+            results.sort_by(|a, b| a.document.cmp(&b.document));
+            assert_eq!(results[0].document, doc_c.clone());
             assert_eq!(results[1].document, doc_b.clone());
+            assert_eq!(results[2].document, doc_a.clone());
         }
     }
 }
