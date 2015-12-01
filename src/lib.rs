@@ -78,6 +78,22 @@ impl<T: ?Sized> CandidatesFilter for Box<T> where T: CandidatesFilter {
     }
 }
 
+trait CandidatesFilterBoxClone {
+    fn clone_box(&self) -> Box<CandidatesFilter>;
+}
+
+impl<T> CandidatesFilterBoxClone for T where T: CandidatesFilter + Clone + 'static {
+    fn clone_box(&self) -> Box<CandidatesFilter> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<CandidatesFilter> {
+    fn clone(&self) -> Box<CandidatesFilter> {
+        self.clone_box()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct SimilarityThresholdFilter(pub f64);
 
@@ -199,7 +215,7 @@ pub trait Backend {
     fn load_state(&mut self) -> Result<Option<Arc<State>>, Self::Error>;
     fn insert(&mut self, signature: Arc<Signature>, doc: Arc<Self::Document>) -> Result<(), Self::Error>;
     fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, collector: C) -> Result<CR, LookupError<Self::Error, CE>>
-        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = Self::Document, Result = CR>;
+        where F: CandidatesFilter + Clone, C: CandidatesCollector<Error = CE, Document = Self::Document, Result = CR>;
     fn rotate(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }

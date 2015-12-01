@@ -119,7 +119,7 @@ impl<B, E> Backend for Worker<B, E> where B: Backend, E: fmt::Debug + From<B::Er
     }
 
     fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, mut collector: C) -> Result<CR, LookupError<E, CE>>
-        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = B::Document, Result = CR>
+        where F: CandidatesFilter + Clone, C: CandidatesCollector<Error = CE, Document = B::Document, Result = CR>
     {
         if self.redirect_lookup {
             return collector.finish().map_err(|e| LookupError::Collector(e))

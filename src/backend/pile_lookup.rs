@@ -109,7 +109,7 @@ impl<D> Backend for PileLookup<D> where D: Deserialize {
     }
 
     fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, mut filter: F, mut collector: C) -> Result<CR, LookupError<Error, CE>>
-        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
+        where F: CandidatesFilter + Clone, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
     {
         self.merger.reset();
         for band in signature.bands.iter() {

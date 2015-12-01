@@ -137,7 +137,7 @@ impl<D> Backend for PileCompile<D> {
     }
 
     fn lookup<F, C, CR, CE>(&mut self, _signature: Arc<Signature>, _filter: F, _collector: C) -> Result<CR, LookupError<Error, CE>>
-        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
+        where F: CandidatesFilter + Clone, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
     {
         Err(LookupError::Backend(Error::ReadUnsupported))
     }

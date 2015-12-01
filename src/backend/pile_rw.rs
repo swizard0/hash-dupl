@@ -117,7 +117,7 @@ impl<D> Backend for PileRw<D> where D: Serialize + Deserialize + Send + Sync + '
     }
 
     fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, collector: C) -> Result<CR, LookupError<Error, CE>>
-        where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
+        where F: CandidatesFilter + Clone, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
     {
         if let RunState::Freezing { .. } = self.state {
             if let RunState::Freezing { in_memory: mem_backend, compile: mut pile_compile } = mem::replace(&mut self.state, RunState::Invalid) {
