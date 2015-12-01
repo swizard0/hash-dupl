@@ -1,7 +1,9 @@
+use std::mem;
 use std::sync::Arc;
+use std::sync::mpsc::TryRecvError;
 use std::path::{Path, PathBuf};
 use serde::{Serialize, Deserialize};
-use super::worker::Worker;
+use super::worker::{Worker, Req, Rep};
 use super::{in_memory, pile_lookup, pile_compile};
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
 
@@ -9,7 +11,7 @@ enum RunState<D> where D: Serialize + Deserialize + Send + Sync + 'static {
     Invalid,
     Filling { in_memory: Worker<in_memory::InMemory<D>>, compile: Worker<pile_compile::PileCompile<D>>, },
     Freezing { in_memory: Worker<in_memory::InMemory<D>>, compile: Worker<pile_compile::PileCompile<D>>, },
-    Freezed { lookup: Worker<pile_lookup::PileLookup<D>>, },
+    Freezed { lookup: pile_lookup::PileLookup<D>, },
 }
 
 pub struct PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
@@ -54,9 +56,7 @@ impl<D> Backend for PileRw<D> where D: Serialize + Deserialize + Send + Sync + '
                 try!(pile_backend.save_state(state).map_err(|e| Error::PileCompile(e)));
                 Ok(())
             },
-            RunState::Freezing { .. } =>
-                Err(Error::UnsupportedForCurrentMode),
-            RunState::Freezed { .. } =>
+            RunState::Freezing { .. } | RunState::Freezed { .. } =>
                 Err(Error::UnsupportedForCurrentMode),
         }
     }
@@ -78,14 +78,17 @@ impl<D> Backend for PileRw<D> where D: Serialize + Deserialize + Send + Sync + '
         match self.state {
             RunState::Invalid =>
                 unreachable!(),
-            RunState::Filling { in_memory: ref mut mem_backend, compile: ref mut pile_backend } => {
-                try!(mem_backend.insert(signature.clone(), doc.clone()).map_err(|_| Error::InMemory));
-                try!(pile_backend.insert(signature, doc).map_err(|e| Error::PileCompile(e)));
-                Ok(())
+            RunState::Filling { in_memory: ref mem_backend, compile: ref pile_backend } => {
+                mem_backend.tx.send(Req::Insert(signature.clone(), doc.clone())).unwrap();
+                pile_backend.tx.send(Req::Insert(signature, doc)).unwrap();
+                match (mem_backend.rx.recv().unwrap(), pile_backend.rx.recv().unwrap()) {
+                    (Ok(Rep::Ok), Ok(Rep::Ok)) => Ok(()),
+                    (Err(..), _) => Err(Error::InMemory),
+                    (_, Err(e)) => Err(Error::PileCompile(e)),
+                    other @ (Ok(..), Ok(..)) => panic!("unexpected rep pair: {:?}", other),
+                }
             },
-            RunState::Freezing { .. } =>
-                Err(Error::UnsupportedForCurrentMode),
-            RunState::Freezed { .. } =>
+            RunState::Freezing { .. } | RunState::Freezed { .. } =>
                 Err(Error::UnsupportedForCurrentMode),
         }
     }
@@ -93,6 +96,28 @@ impl<D> Backend for PileRw<D> where D: Serialize + Deserialize + Send + Sync + '
     fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, collector: C) -> Result<CR, LookupError<Error, CE>>
         where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = D, Result = CR>
     {
+        if let RunState::Freezing { .. } = self.state {
+            if let RunState::Freezing { in_memory: mem_backend, compile: mut pile_compile } = mem::replace(&mut self.state, RunState::Invalid) {
+                loop {
+                    match pile_compile.rx.try_recv() {
+                        Ok(Ok(Rep::TerminateAck)) => {
+                            pile_compile.shutdown();
+                            let pile_lookup =
+                                try!(pile_lookup::PileLookup::new(&self.database_dir).map_err(|e| LookupError::Backend(Error::PileLookup(e))));
+                            self.state = RunState::Freezed { lookup: pile_lookup, };
+                        },
+                        Ok(..) =>
+                            continue,
+                        Err(TryRecvError::Empty) =>
+                            self.state = RunState::Freezing { in_memory: mem_backend, compile: pile_compile, },
+                        Err(..) =>
+                            panic!("compile backend died unexpectedly"),
+                    }
+                    break
+                }
+            }
+        }
+
         match self.state {
             RunState::Invalid =>
                 unreachable!(),
@@ -111,6 +136,26 @@ impl<D> Backend for PileRw<D> where D: Serialize + Deserialize + Send + Sync + '
                     LookupError::Collector(e) => LookupError::Collector(e),
                     LookupError::Backend(e) => LookupError::Backend(Error::PileLookup(e)),
                 }),
+        }
+    }
+
+    fn rotate(&mut self) -> Result<(), Error> {
+        match mem::replace(&mut self.state, RunState::Invalid) {
+            RunState::Invalid =>
+                unreachable!(),
+            RunState::Filling { in_memory: mem_backend, compile: pile_backend, } => {
+                pile_backend.tx.send(Req::Terminate).unwrap();
+                self.state = RunState::Freezing { in_memory: mem_backend, compile: pile_backend, };
+                Ok(())
+            },
+            state @ RunState::Freezing { .. } => {
+                self.state = state;
+                Err(Error::UnsupportedForCurrentMode)
+            },
+            state @ RunState::Freezed { .. } => {
+                self.state = state;
+                Err(Error::UnsupportedForCurrentMode)
+            }
         }
     }
 }
