@@ -12,6 +12,7 @@ use rmp_serde;
 use super::pile_common::{BandEntry, BandEntriesReducer};
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
 
+#[derive(Clone, Copy)]
 pub struct Params {
     pub min_tree_height: usize,
     pub max_block_size: usize,
