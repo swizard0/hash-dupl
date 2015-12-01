@@ -1,6 +1,7 @@
 use std::{io, fs};
 use std::sync::Arc;
 use std::convert::From;
+use std::default::Default;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use time;
@@ -14,6 +15,12 @@ use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, St
 pub struct Params {
     pub compile_params: pile_compile::Params,
     pub windows_count: usize,
+}
+
+impl Default for Params {
+    fn default() -> Params {
+        Params { compile_params: Default::default(), windows_count: 12, }
+    }
 }
 
 #[derive(Debug)]

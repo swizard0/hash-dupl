@@ -1,5 +1,6 @@
 use std::{io, fs};
 use std::sync::Arc;
+use std::default::Default;
 use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::thread::{Builder, JoinHandle};
@@ -18,6 +19,17 @@ pub struct Params {
     pub max_block_size: usize,
     pub memory_limit_power: usize,
     pub parallel_config: merge::ParallelConfig,
+}
+
+impl Default for Params {
+    fn default() -> Params {
+        Params {
+            min_tree_height: 1,
+            max_block_size: 32,
+            memory_limit_power: 16,
+            parallel_config: merge::ParallelConfig::SingleThread,
+        }
+    }
 }
 
 enum IndexCommand<D> {
