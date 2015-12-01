@@ -371,9 +371,13 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
 #[cfg(test)]
 mod test {
     use std::sync::Arc;
-    use super::{HashDupl, Config, Shingles, LookupResult, maximum_band_length};
+    use bin_merge_pile::merge::ParallelConfig;
+    use super::{HashDupl, Config, Shingles, LookupResult, Backend, maximum_band_length};
     use super::shingler::tokens::Tokens;
     use super::backend::in_memory::InMemory;
+    use super::backend::worker::Worker;
+    use super::backend::pile_rw::PileRw;
+    use super::backend::pile_compile::Params;
 
     #[test]
     fn lsh_prob() {
@@ -392,9 +396,8 @@ mod test {
         assert_eq!(signature.minhash.len(), 128);
     }
 
-    #[test]
-    fn insert_lookup_basic() {
-        let mut hd = HashDupl::new(Tokens::new(), InMemory::new(), Config::default()).unwrap();
+    fn backend_insert_lookup_basic<B, E>(backend: B) where B: Backend<Document = i32, Error = E>, E: ::std::fmt::Debug {
+        let mut hd = HashDupl::new(Tokens::new(), backend, Config::default()).unwrap();
         let mut shingles = Shingles::new();
         let doc_a = Arc::new(177);
         let doc_b = Arc::new(277);
@@ -429,5 +432,25 @@ mod test {
             Some(&LookupResult { similarity: sim, document: ref doc, }) if sim >= 0.4 && doc == &doc_b => (),
             other => panic!("unexpected result 1: {:?}", other),
         }
+    }
+
+    #[test]
+    fn insert_lookup_basic_in_memory() {
+        backend_insert_lookup_basic(InMemory::new());
+    }
+
+    #[test]
+    fn insert_lookup_basic_in_memory_worker() {
+        backend_insert_lookup_basic(Worker::run(InMemory::new()));
+    }
+
+    #[test]
+    fn insert_lookup_basic_pile_rw() {
+        backend_insert_lookup_basic(PileRw::new("/tmp/hd_pile_rw_a", Params {
+            min_tree_height: 1,
+            max_block_size: 32,
+            memory_limit_power: 13,
+            parallel_config: ParallelConfig::SingleThread,
+        }).unwrap());
     }
 }
