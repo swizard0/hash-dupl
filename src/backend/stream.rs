@@ -1,22 +1,11 @@
 use std::{io, fs};
 use std::sync::Arc;
+use std::convert::From;
 use std::path::{Path, PathBuf};
 use serde::{Serialize, Deserialize};
 use super::worker::{Worker, Req, Rep};
 use super::{pile_rw, pile_lookup, pile_compile};
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
-
-enum Window<D> where D: Serialize + Deserialize + Send + Sync + 'static {
-    Rw(Worker<pile_rw::PileRw<D>>),
-    Ro(Worker<pile_lookup::PileLookup<D>>),
-}
-
-pub struct Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
-    windows_dir: PathBuf,
-    windows: Vec<Window<D>>,
-    rw_window: Option<Worker<pile_rw::PileRw<D>>>,
-    // lookup_rx: Receiver<Result<Rep<D>, B::Error>>
-}
 
 #[derive(Debug)]
 pub enum Error {
@@ -26,7 +15,33 @@ pub enum Error {
     ReadWindowsDir(PathBuf, io::Error),
     ReadWindowsDirEntry(PathBuf, io::Error),
     StatWindowsDirEntry(PathBuf, io::Error),
+    PileRw(pile_rw::Error),
     PileLookup(pile_lookup::Error),
+    PileCompile(pile_compile::Error),
+}
+
+impl From<pile_rw::Error> for Error {
+    fn from(err: pile_rw::Error) -> Error {
+        Error::PileRw(err)
+    }
+}
+
+impl From<pile_lookup::Error> for Error {
+    fn from(err: pile_lookup::Error) -> Error {
+        Error::PileLookup(err)
+    }
+}
+
+enum Window<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+    Rw(Worker<pile_rw::PileRw<D>, Error>),
+    Ro(Worker<pile_lookup::PileLookup<D>, Error>),
+}
+
+pub struct Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+    windows_dir: PathBuf,
+    windows: Vec<Window<D>>,
+    rw_window: Option<Worker<pile_rw::PileRw<D>, Error>>,
+    // lookup_rx: Receiver<Result<Rep<D>, B::Error>>
 }
 
 impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {

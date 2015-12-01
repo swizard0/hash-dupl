@@ -441,7 +441,7 @@ mod test {
 
     #[test]
     fn insert_lookup_basic_in_memory_worker() {
-        backend_insert_lookup_basic(Worker::run(InMemory::new()));
+        backend_insert_lookup_basic(Worker::<_, ()>::run(InMemory::new()));
     }
 
     #[test]

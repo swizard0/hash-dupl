@@ -9,8 +9,8 @@ use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, St
 
 enum RunState<D> where D: Serialize + Deserialize + Send + Sync + 'static {
     Invalid,
-    Filling { in_memory: Worker<in_memory::InMemory<D>>, compile: Worker<pile_compile::PileCompile<D>>, },
-    Freezing { in_memory: Worker<in_memory::InMemory<D>>, compile: Worker<pile_compile::PileCompile<D>>, },
+    Filling { in_memory: Worker<in_memory::InMemory<D>, ()>, compile: Worker<pile_compile::PileCompile<D>, pile_compile::Error>, },
+    Freezing { in_memory: Worker<in_memory::InMemory<D>, ()>, compile: Worker<pile_compile::PileCompile<D>, pile_compile::Error>, },
     Freezed { lookup: pile_lookup::PileLookup<D>, },
 }
 

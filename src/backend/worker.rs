@@ -1,5 +1,6 @@
 use std::fmt;
 use std::sync::Arc;
+use std::convert::From;
 use std::thread::{Builder, JoinHandle};
 use std::sync::mpsc::{channel, Sender, Receiver, SendError};
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
@@ -34,23 +35,23 @@ impl<D> fmt::Debug for Rep<D> {
     }
 }
 
-pub struct Worker<B> where B: Backend, B::Error: fmt::Debug {
+pub struct Worker<B, E> where B: Backend, E: fmt::Debug {
     pub tx: Sender<Req<B::Document>>,
-    pub rx: Receiver<Result<Rep<B::Document>, B::Error>>,
+    pub rx: Receiver<Result<Rep<B::Document>, E>>,
     redirect_lookup: bool,
     slave: Option<JoinHandle<()>>,
 }
 
-impl<B> Worker<B> where B: Backend + Send + 'static, B::Document: Send + Sync, B::Error: Send + Sync + fmt::Debug {
-    pub fn run(backend: B) -> Worker<B> {
+impl<B, E> Worker<B, E> where B: Backend + Send + 'static, B::Document: Send + Sync, E: Send + Sync + fmt::Debug + From<B::Error> + 'static {
+    pub fn run(backend: B) -> Worker<B, E> {
         Worker::new(backend, None)
     }
 
-    pub fn run_redirect_lookup(backend: B, lookup_tx: Sender<Result<Rep<B::Document>, B::Error>>) -> Worker<B> {
+    pub fn run_redirect_lookup(backend: B, lookup_tx: Sender<Result<Rep<B::Document>, E>>) -> Worker<B, E> {
         Worker::new(backend, Some(lookup_tx))
     }
 
-    fn new(backend: B, lookup_tx: Option<Sender<Result<Rep<B::Document>, B::Error>>>) -> Worker<B> {
+    fn new(backend: B, lookup_tx: Option<Sender<Result<Rep<B::Document>, E>>>) -> Worker<B, E> {
         let redirect_lookup = lookup_tx.is_some();
         let (master_tx, slave_rx) = channel();
         let (slave_tx, master_rx) = channel();
@@ -74,7 +75,7 @@ impl<B> Worker<B> where B: Backend + Send + 'static, B::Document: Send + Sync, B
     }
 }
 
-impl<B> Drop for Worker<B> where B: Backend, B::Error: fmt::Debug {
+impl<B, E> Drop for Worker<B, E> where B: Backend, E: fmt::Debug {
     fn drop(&mut self) {
         if let Some(slave) = self.slave.take() {
             self.tx.send(Req::Terminate).unwrap();
@@ -86,11 +87,11 @@ impl<B> Drop for Worker<B> where B: Backend, B::Error: fmt::Debug {
     }
 }
 
-impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
-    type Error = B::Error;
+impl<B, E> Backend for Worker<B, E> where B: Backend, E: fmt::Debug + From<B::Error> {
+    type Error = E;
     type Document = B::Document;
 
-    fn save_state(&mut self, state: Arc<State>) -> Result<(), B::Error> {
+    fn save_state(&mut self, state: Arc<State>) -> Result<(), E> {
         self.tx.send(Req::SaveState(state)).unwrap();
         match self.rx.recv() {
             Ok(Ok(Rep::Ok)) => Ok(()),
@@ -99,7 +100,7 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
         }
     }
 
-    fn load_state(&mut self) -> Result<Option<Arc<State>>, B::Error> {
+    fn load_state(&mut self) -> Result<Option<Arc<State>>, E> {
         self.tx.send(Req::LoadState).unwrap();
         match self.rx.recv() {
             Ok(Ok(Rep::State(maybe_state))) => Ok(maybe_state),
@@ -108,7 +109,7 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
         }
     }
 
-    fn insert(&mut self, signature: Arc<Signature>, doc: Arc<B::Document>) -> Result<(), B::Error> {
+    fn insert(&mut self, signature: Arc<Signature>, doc: Arc<B::Document>) -> Result<(), E> {
         self.tx.send(Req::Insert(signature, doc)).unwrap();
         match self.rx.recv() {
             Ok(Ok(Rep::Ok)) => Ok(()),
@@ -117,7 +118,7 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
         }
     }
 
-    fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, mut collector: C) -> Result<CR, LookupError<B::Error, CE>>
+    fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, mut collector: C) -> Result<CR, LookupError<E, CE>>
         where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = B::Document, Result = CR>
     {
         if self.redirect_lookup {
@@ -150,24 +151,24 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
 
 }
 
-fn worker_loop<B>(mut backend: B,
-                  tx: &Sender<Result<Rep<B::Document>, B::Error>>,
-                  lookup_tx: Option<Sender<Result<Rep<B::Document>, B::Error>>>,
-                  rx: &Receiver<Req<B::Document>>) -> Result<(), B::Error>
-    where B: Backend
+fn worker_loop<B, E>(mut backend: B,
+                     tx: &Sender<Result<Rep<B::Document>, E>>,
+                     lookup_tx: Option<Sender<Result<Rep<B::Document>, E>>>,
+                     rx: &Receiver<Req<B::Document>>) -> Result<(), E>
+    where B: Backend, E: From<B::Error>
 {
     loop {
         match rx.recv().unwrap() {
             Req::SaveState(state) =>
-                tx.send(backend.save_state(state).map(|()| Rep::Ok)).unwrap(),
+                tx.send(backend.save_state(state).map(|()| Rep::Ok).map_err(|e| From::from(e))).unwrap(),
             Req::LoadState =>
-                tx.send(backend.load_state().map(|s| Rep::State(s))).unwrap(),
+                tx.send(backend.load_state().map(|s| Rep::State(s)).map_err(|e| From::from(e))).unwrap(),
             Req::Insert(signature, document) =>
-                tx.send(backend.insert(signature, document).map(|()| Rep::Ok)).unwrap(),
+                tx.send(backend.insert(signature, document).map(|()| Rep::Ok).map_err(|e| From::from(e))).unwrap(),
             Req::Lookup(signature, filter) => {
-                struct Transmitter<'a, B>(&'a Sender<Result<Rep<B::Document>, B::Error>>) where B: Backend + 'a;
-                impl<'a, B> CandidatesCollector for Transmitter<'a, B> where B: Backend {
-                    type Error = SendError<Result<Rep<B::Document>, B::Error>>;
+                struct Transmitter<'a, B, E: 'a>(&'a Sender<Result<Rep<B::Document>, E>>) where B: Backend + 'a;
+                impl<'a, B, E> CandidatesCollector for Transmitter<'a, B, E> where B: Backend {
+                    type Error = SendError<Result<Rep<B::Document>, E>>;
                     type Document = B::Document;
                     type Result = ();
 
@@ -180,14 +181,14 @@ fn worker_loop<B>(mut backend: B,
                     }
                 }
 
-                match backend.lookup(signature, filter, Transmitter::<B>(if let Some(ref rtx) = lookup_tx { rtx } else { &tx })) {
+                match backend.lookup(signature, filter, Transmitter::<B, E>(if let Some(ref rtx) = lookup_tx { rtx } else { &tx })) {
                     Ok(()) => (),
-                    Err(LookupError::Backend(e)) => tx.send(Err(e)).unwrap(),
+                    Err(LookupError::Backend(e)) => tx.send(Err(From::from(e))).unwrap(),
                     Err(LookupError::Collector(e)) => panic!("{:?}", e),
                 }
             }
             Req::Rotate =>
-                tx.send(backend.rotate().map(|()| Rep::Ok)).unwrap(),
+                tx.send(backend.rotate().map(|()| Rep::Ok).map_err(|e| From::from(e))).unwrap(),
             Req::Terminate =>
                 return Ok(()),
         }
@@ -205,7 +206,7 @@ mod test {
     fn save_load_state() {
         let state = Arc::new(State::new(Config::default()));
         let bg_backend = InMemory::<String>::new();
-        let mut backend = Worker::run(bg_backend);
+        let mut backend = Worker::<_, ()>::run(bg_backend);
         assert_eq!(backend.load_state().unwrap(), None);
         backend.save_state(state.clone()).unwrap();
         assert_eq!(backend.load_state().unwrap().unwrap(), state.clone());
@@ -214,7 +215,7 @@ mod test {
     #[test]
     fn insert_lookup() {
         let bg_backend = InMemory::<String>::new();
-        let mut backend = Worker::run(bg_backend);
+        let mut backend = Worker::<_, ()>::run(bg_backend);
         let doc_a = Arc::new("some text".to_owned());
         let doc_b = Arc::new("some other text".to_owned());
         backend.insert(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], }), doc_a.clone()).unwrap();
