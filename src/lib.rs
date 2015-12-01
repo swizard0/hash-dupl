@@ -357,7 +357,7 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
     }
 
     pub fn lookup_best(&mut self, signature: Arc<Signature>) -> Result<Option<LookupResult<D>>, Error<SE, BE>> {
-        let filter = Box::new(TrackBestFilter::new(self.state.config.similarity_threshold));
+        let filter = TrackBestFilter::new(self.state.config.similarity_threshold);
         let collector = TrackBestCollector::new();
         self.backend.lookup(signature, filter, collector)
             .map_err(|err| match err {
@@ -367,7 +367,7 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
     }
 
     pub fn lookup_all(&mut self, signature: Arc<Signature>) -> Result<Vec<LookupResult<D>>, Error<SE, BE>> {
-        let filter = Box::new(SimilarityThresholdFilter(self.state.config.similarity_threshold));
+        let filter = SimilarityThresholdFilter(self.state.config.similarity_threshold);
         let collector = Vec::new();
         self.backend.lookup(signature, filter, collector)
             .map_err(|err| match err {
