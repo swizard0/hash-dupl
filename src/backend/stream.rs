@@ -97,7 +97,7 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
         // create lookup channel
         let (worker_tx, stream_rx) = channel();
 
-        let mut windows = Vec::new();
+        let mut windows_backends = Vec::new();
         // open existing windows
         for entry in try!(fs::read_dir(&base_dir).map_err(|e| Error::ReadWindowsDir(base_dir.clone(), e))) {
             let database = try!(entry.map_err(|e| Error::ReadWindowsDirEntry(base_dir.clone(), e))).path();
@@ -120,17 +120,24 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
                 nsec: try!(Deserialize::deserialize(&mut deserializer).map_err(|e| Error::DeserializeSavedAt(e))),
             };
 
-            windows.push(Window::Ro(InnerWindow {
+            windows_backends.push(InnerWindow {
                 saved_at: saved_at,
                 database_dir: database.clone(),
-                backend: Worker::run_redirect_lookup(pile_lookup, worker_tx.clone()),
-            }));
+                backend: pile_lookup,
+            });
         }
 
         let mut stream = Stream {
             state: None,
             windows_dir: base_dir,
-            windows: windows,
+            windows: windows_backends
+                .into_iter()
+                .map(|InnerWindow { saved_at: s, database_dir: d, backend: b, }| Window::Ro(InnerWindow {
+                    saved_at: s,
+                    database_dir: d,
+                    backend: Worker::run_redirect_lookup(b, worker_tx.clone()),
+                }))
+                .collect(),
             rw_window: None,
             params: params,
             lookup_tx: worker_tx,
