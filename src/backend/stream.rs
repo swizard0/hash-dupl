@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use time;
 use serde::{Serialize, Deserialize};
+use rmp_serde;
 use super::worker::{Worker, Req, Rep};
 use super::{pile_rw, pile_lookup, pile_compile};
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
@@ -18,6 +19,10 @@ pub enum Error {
     ReadWindowsDirEntry(PathBuf, io::Error),
     StatWindowsDirEntry(PathBuf, io::Error),
     StatWindowRWDir(PathBuf, io::Error),
+    CreateSavedAtFile(PathBuf, io::Error),
+    OpenSavedAtFile(PathBuf, io::Error),
+    SerializeSavedAt(rmp_serde::encode::Error),
+    DeserializeSavedAt(rmp_serde::decode::Error),
     PileRw(pile_rw::Error),
     PileLookup(pile_lookup::Error),
     PileCompile(pile_compile::Error),
@@ -41,6 +46,7 @@ impl From<pile_lookup::Error> for Error {
 }
 
 struct InnerWindow<B> {
+    saved_at: time::Timespec,
     database_dir: PathBuf,
     backend: B,
 }
@@ -91,7 +97,17 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
                 return Err(Error::MissingStateForWindow(database.clone()))
             }
 
+            let mut saved_at_filename = database.clone();
+            saved_at_filename.push("saved_at.bin");
+            let mut saved_at_file = try!(fs::File::open(&saved_at_filename).map_err(|e| Error::OpenSavedAtFile(saved_at_filename, e)));
+            let mut deserializer = rmp_serde::Deserializer::new(&mut saved_at_file);
+            let saved_at = time::Timespec {
+                sec: try!(Deserialize::deserialize(&mut deserializer).map_err(|e| Error::DeserializeSavedAt(e))),
+                nsec: try!(Deserialize::deserialize(&mut deserializer).map_err(|e| Error::DeserializeSavedAt(e))),
+            };
+
             windows.push(Window::Ro(InnerWindow {
+                saved_at: saved_at,
                 database_dir: database.clone(),
                 backend: Worker::run_redirect_lookup(pile_lookup, worker_tx.clone()),
             }));
@@ -114,8 +130,8 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
         let mut common_state = self.state.as_ref().map(|s| s.clone());
         for win in self.windows.iter_mut() {
             let (database_dir, maybe_state) = match win {
-                &mut Window::Rw(InnerWindow { database_dir: ref dir, backend: ref mut win, }) => (dir, try!(win.load_state())),
-                &mut Window::Ro(InnerWindow { database_dir: ref dir, backend: ref mut win, }) => (dir, try!(win.load_state())),
+                &mut Window::Rw(InnerWindow { database_dir: ref dir, backend: ref mut win, .. }) => (dir, try!(win.load_state())),
+                &mut Window::Ro(InnerWindow { database_dir: ref dir, backend: ref mut win, .. }) => (dir, try!(win.load_state())),
             };
 
             match (maybe_state, &mut common_state) {
@@ -152,7 +168,19 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
                 self.state = Some(state)
             }
         }
+
+        let saved_at = time::get_time();
+        {
+            let mut saved_at_filename = database_dir.clone();
+            saved_at_filename.push("saved_at.bin");
+            let mut saved_at_file = try!(fs::File::create(&saved_at_filename).map_err(|e| Error::CreateSavedAtFile(saved_at_filename, e)));
+            let mut serializer = rmp_serde::Serializer::new(&mut saved_at_file);
+            try!(saved_at.sec.serialize(&mut serializer).map_err(|e| Error::SerializeSavedAt(e)));
+            try!(saved_at.nsec.serialize(&mut serializer).map_err(|e| Error::SerializeSavedAt(e)));
+        }
+
         self.rw_window = Some(InnerWindow {
+            saved_at: saved_at,
             database_dir: database_dir,
             backend: Worker::run_redirect_lookup(pile_rw, self.lookup_tx.clone()),
         });
