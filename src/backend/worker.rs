@@ -35,8 +35,8 @@ impl<D> fmt::Debug for Rep<D> {
 }
 
 pub struct Worker<B> where B: Backend, B::Error: fmt::Debug {
-    tx: Sender<Req<B::Document>>,
-    rx: Receiver<Result<Rep<B::Document>, B::Error>>,
+    pub tx: Sender<Req<B::Document>>,
+    pub rx: Receiver<Result<Rep<B::Document>, B::Error>>,
     slave: Option<JoinHandle<()>>,
 }
 
@@ -53,6 +53,12 @@ impl<B> Worker<B> where B: Backend + Send + 'static, B::Document: Send + Sync, B
             tx: master_tx,
             rx: master_rx,
             slave: Some(slave),
+        }
+    }
+
+    pub fn shutdown(&mut self) {
+        if let Some(slave) = self.slave.take() {
+            slave.join().unwrap();
         }
     }
 }
@@ -77,6 +83,7 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
         self.tx.send(Req::SaveState(state)).unwrap();
         match self.rx.recv() {
             Ok(Ok(Rep::Ok)) => Ok(()),
+            Ok(Err(e)) => Err(e),
             other => panic!("unexpected rep: {:?}", other),
         }
     }
@@ -85,6 +92,7 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
         self.tx.send(Req::LoadState).unwrap();
         match self.rx.recv() {
             Ok(Ok(Rep::State(maybe_state))) => Ok(maybe_state),
+            Ok(Err(e)) => Err(e),
             other => panic!("unexpected rep: {:?}", other),
         }
     }
@@ -93,6 +101,7 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
         self.tx.send(Req::Insert(signature, doc)).unwrap();
         match self.rx.recv() {
             Ok(Ok(Rep::Ok)) => Ok(()),
+            Ok(Err(e)) => Err(e),
             other => panic!("unexpected rep: {:?}", other),
         }
     }
@@ -107,6 +116,8 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
                     try!(collector.receive(similarity, doc).map_err(|e| LookupError::Collector(e))),
                 Ok(Ok(Rep::LookupFinish)) =>
                     return collector.finish().map_err(|e| LookupError::Collector(e)),
+                Ok(Err(e)) =>
+                    return Err(LookupError::Backend(e)),
                 other =>
                     panic!("unexpected rep: {:?}", other),
             }
@@ -117,6 +128,7 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
         self.tx.send(Req::Rotate).unwrap();
         match self.rx.recv() {
             Ok(Ok(Rep::Ok)) => Ok(()),
+            Ok(Err(e)) => Err(e),
             other => panic!("unexpected rep: {:?}", other),
         }
     }
