@@ -222,7 +222,7 @@ pub trait Shingler {
 pub struct HashDupl<S, B> {
     shingler: S,
     backend: B,
-    state: State,
+    state: Arc<State>,
 }
 
 #[derive(Debug)]
@@ -271,7 +271,7 @@ pub fn minhash_distance(minhash_a: &[u64], minhash_b: &[u64]) -> f64 {
 }
 
 impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<Error = BE, Document = D> {
-    pub fn new(shingler: S, backend: B, user_config: Config) -> Result<HashDupl<S, B>, Error<SE, BE>> {
+    pub fn new(shingler: S, mut backend: B, user_config: Config) -> Result<HashDupl<S, B>, Error<SE, BE>> {
         match user_config {
             Config { shingle_length: l, .. } if l == 0 =>
                 Err(Error::Config(ConfigError::ZeroShingleLength)),
@@ -282,10 +282,19 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
             Config { band_min_probability: p, .. } if p < 0.0 || p > 1.0 =>
                 Err(Error::Config(ConfigError::InvalidBandMinProbabilityRange)),
             config => {
+                let state = match try!(backend.load_state().map_err(|e| Error::Backend(e))) {
+                    Some(state) => state,
+                    None => {
+                        let new_state = Arc::new(State::new(config));
+                        try!(backend.save_state(new_state.clone()).map_err(|e| Error::Backend(e)));
+                        new_state
+                    }
+                };
+
                 Ok(HashDupl {
                     shingler: shingler,
                     backend: backend,
-                    state: State::new(config),
+                    state: state,
                 })
             },
         }
