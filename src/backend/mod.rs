@@ -4,3 +4,4 @@ pub mod pile_common;
 pub mod pile_compile;
 pub mod pile_lookup;
 pub mod pile_rw;
+pub mod stream;
