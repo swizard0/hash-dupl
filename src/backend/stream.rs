@@ -19,7 +19,7 @@ pub struct Params {
 
 impl Default for Params {
     fn default() -> Params {
-        Params { compile_params: Default::default(), windows_count: 12, }
+        Params { compile_params: Default::default(), windows_count: 32, }
     }
 }
 

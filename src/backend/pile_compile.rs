@@ -24,8 +24,8 @@ pub struct Params {
 impl Default for Params {
     fn default() -> Params {
         Params {
-            min_tree_height: 1,
-            max_block_size: 32,
+            min_tree_height: 3,
+            max_block_size: 64,
             memory_limit_power: 16,
             parallel_config: merge::ParallelConfig::SingleThread,
         }
