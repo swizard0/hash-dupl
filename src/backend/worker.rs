@@ -37,21 +37,32 @@ impl<D> fmt::Debug for Rep<D> {
 pub struct Worker<B> where B: Backend, B::Error: fmt::Debug {
     pub tx: Sender<Req<B::Document>>,
     pub rx: Receiver<Result<Rep<B::Document>, B::Error>>,
+    redirect_lookup: bool,
     slave: Option<JoinHandle<()>>,
 }
 
 impl<B> Worker<B> where B: Backend + Send + 'static, B::Document: Send + Sync, B::Error: Send + Sync + fmt::Debug {
     pub fn run(backend: B) -> Worker<B> {
+        Worker::new(backend, None)
+    }
+
+    pub fn run_redirect_lookup(backend: B, lookup_tx: Sender<Result<Rep<B::Document>, B::Error>>) -> Worker<B> {
+        Worker::new(backend, Some(lookup_tx))
+    }
+
+    fn new(backend: B, lookup_tx: Option<Sender<Result<Rep<B::Document>, B::Error>>>) -> Worker<B> {
+        let redirect_lookup = lookup_tx.is_some();
         let (master_tx, slave_rx) = channel();
         let (slave_tx, master_rx) = channel();
         let slave = Builder::new().name("hash dupl backend worker".to_owned())
             .spawn(move || {
-                worker_loop(backend, &slave_tx, &slave_rx).unwrap();
+                worker_loop(backend, &slave_tx, lookup_tx, &slave_rx).unwrap();
                 slave_tx.send(Ok(Rep::TerminateAck)).unwrap();
             }).unwrap();
         Worker {
             tx: master_tx,
             rx: master_rx,
+            redirect_lookup: redirect_lookup,
             slave: Some(slave),
         }
     }
@@ -109,6 +120,10 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
     fn lookup<F, C, CR, CE>(&mut self, signature: Arc<Signature>, filter: F, mut collector: C) -> Result<CR, LookupError<B::Error, CE>>
         where F: CandidatesFilter, C: CandidatesCollector<Error = CE, Document = B::Document, Result = CR>
     {
+        if self.redirect_lookup {
+            return collector.finish().map_err(|e| LookupError::Collector(e))
+        }
+
         self.tx.send(Req::Lookup(signature, Box::new(filter))).unwrap();
         loop {
             match self.rx.recv() {
@@ -135,7 +150,10 @@ impl<B> Backend for Worker<B> where B: Backend, B::Error: fmt::Debug {
 
 }
 
-fn worker_loop<B>(mut backend: B, tx: &Sender<Result<Rep<B::Document>, B::Error>>, rx: &Receiver<Req<B::Document>>) -> Result<(), B::Error>
+fn worker_loop<B>(mut backend: B,
+                  tx: &Sender<Result<Rep<B::Document>, B::Error>>,
+                  lookup_tx: Option<Sender<Result<Rep<B::Document>, B::Error>>>,
+                  rx: &Receiver<Req<B::Document>>) -> Result<(), B::Error>
     where B: Backend
 {
     loop {
@@ -162,7 +180,7 @@ fn worker_loop<B>(mut backend: B, tx: &Sender<Result<Rep<B::Document>, B::Error>
                     }
                 }
 
-                match backend.lookup(signature, filter, Transmitter::<B>(&tx)) {
+                match backend.lookup(signature, filter, Transmitter::<B>(if let Some(ref rtx) = lookup_tx { rtx } else { &tx })) {
                     Ok(()) => (),
                     Err(LookupError::Backend(e)) => tx.send(Err(e)).unwrap(),
                     Err(LookupError::Collector(e)) => panic!("{:?}", e),
