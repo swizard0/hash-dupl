@@ -25,6 +25,7 @@ pub enum Error {
     ReadWindowsDirEntry(PathBuf, io::Error),
     StatWindowsDirEntry(PathBuf, io::Error),
     StatWindowRWDir(PathBuf, io::Error),
+    RemoveWindowDir(PathBuf, io::Error),
     CreateSavedAtFile(PathBuf, io::Error),
     OpenSavedAtFile(PathBuf, io::Error),
     SerializeSavedAt(rmp_serde::encode::Error),
@@ -266,7 +267,36 @@ impl<D> Backend for Stream<D> where D: Serialize + Deserialize + Send + Sync + '
     }
 
     fn rotate(&mut self) -> Result<(), Error> {
-        Ok(())
+        if let Some(mut window) = self.rw_window.take() {
+            try!(window.backend.rotate());
+            self.windows.push(Window::Rw(window));
+            try!(self.create_rw_window());
+            if self.windows.len() > self.params.windows_count {
+                // find eldest window
+                let mut eldest = None;
+                for (i, win) in self.windows.iter().enumerate() {
+                    let saved_at = match win {
+                        &Window::Ro(InnerWindow { saved_at: ref value, .. }) => value,
+                        &Window::Rw(InnerWindow { saved_at: ref value, .. }) => value,
+                    };
+                    match &mut eldest {
+                        &mut Some((_, ref best_saved_at)) if best_saved_at <= saved_at => (),
+                        &mut Some(ref mut best) => *best = (i, *saved_at),
+                        place => *place = Some((i, *saved_at)),
+                    }
+                }
+                if let Some((i, _)) = eldest {
+                    let database = match self.windows.swap_remove(i) {
+                        Window::Ro(InnerWindow { database_dir: database, .. }) => database,
+                        Window::Rw(InnerWindow { database_dir: database, .. }) => database,
+                    };
+                    try!(fs::remove_dir_all(&database).map_err(|e| Error::RemoveWindowDir(database, e)));
+                }
+            }
+            Ok(())
+        } else {
+            Err(Error::WindowRWNotCreated)
+        }
     }
 }
 
