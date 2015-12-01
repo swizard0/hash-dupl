@@ -12,8 +12,8 @@ use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, St
 
 #[derive(Clone, Copy)]
 pub struct Params {
-    compile_params: pile_compile::Params,
-    windows_count: usize,
+    pub compile_params: pile_compile::Params,
+    pub windows_count: usize,
 }
 
 #[derive(Debug)]

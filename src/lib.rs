@@ -395,14 +395,17 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
 
 #[cfg(test)]
 mod test {
+    use std::fs;
     use std::sync::Arc;
+    use rand::{thread_rng, Rng};
     use bin_merge_pile::merge::ParallelConfig;
     use super::{HashDupl, Config, Shingles, LookupResult, Backend, maximum_band_length};
     use super::shingler::tokens::Tokens;
     use super::backend::in_memory::InMemory;
     use super::backend::worker::Worker;
     use super::backend::pile_rw::PileRw;
-    use super::backend::pile_compile::Params;
+    use super::backend::pile_compile;
+    use super::backend::stream::{Stream, Params};
 
     #[test]
     fn lsh_prob() {
@@ -471,11 +474,100 @@ mod test {
 
     #[test]
     fn insert_lookup_basic_pile_rw() {
-        backend_insert_lookup_basic(PileRw::new("/tmp/hd_pile_rw_a", Params {
+        backend_insert_lookup_basic(PileRw::new("/tmp/hd_pile_rw_a", pile_compile::Params {
             min_tree_height: 1,
             max_block_size: 32,
             memory_limit_power: 13,
             parallel_config: ParallelConfig::SingleThread,
         }).unwrap());
+    }
+
+    fn gen_text() -> String {
+        let mut rng = thread_rng();
+        let total = 50 + (rng.gen::<usize>() % 50);
+        (0 .. total).map(|_| format!("{} ", rng.gen::<u8>())).collect()
+    }
+
+    #[test]
+    fn stream_stress() {
+        let texts: Vec<_> = (0 .. 1000).map(|_| Arc::new(gen_text())).collect();
+        {
+            let _ = fs::remove_dir_all("/tmp/hd_stream_a");
+            let backend = Stream::new("/tmp/hd_stream_a", Params {
+                compile_params: pile_compile::Params {
+                    min_tree_height: 1,
+                    max_block_size: 32,
+                    memory_limit_power: 13,
+                    parallel_config: ParallelConfig::SingleThread,
+                },
+                windows_count: 8,
+            }).unwrap();
+            let mut hd = HashDupl::new(Tokens::new(), backend, Config::default()).unwrap();
+            let mut shingles = Shingles::new();
+
+            // check & fill
+            for (i, text) in texts.iter().enumerate() {
+                hd.shinglify(&***text, &mut shingles).unwrap();
+                let signature = hd.sign(&shingles).unwrap();
+
+                if let Some(LookupResult { similarity: sim, document: doc }) = hd.lookup_best(signature.clone()).unwrap() {
+                    if sim >= 0.99 {
+                        panic!("unexpected found result pass #1 with sim = {} at this point: {:?}", sim, doc);
+                    }
+                }
+
+                hd.insert(signature.clone(), text.clone()).unwrap();
+                if (i + 1) % 100 == 0 {
+                    hd.backend_mut().rotate().unwrap();
+                }
+            }
+
+            // check
+            for (i, text) in texts.iter().enumerate() {
+                hd.shinglify(&***text, &mut shingles).unwrap();
+                let signature = hd.sign(&shingles).unwrap();
+
+                match (i, hd.lookup_best(signature.clone()).unwrap()) {
+                    (ref j, Some(LookupResult { similarity: ref sim, document: ref doc })) if j >= &200 && sim >= &0.99 && doc == text =>
+                        (),
+                    (ref j, Some(LookupResult { similarity: ref sim, .. })) if j < &200 && sim < &0.99 =>
+                        (),
+                    (ref j, None) if j < &200 =>
+                        (),
+                    other =>
+                        panic!("unexpected lookup_best result match: {:?}", other),
+                }
+            }
+        }
+        {
+            let backend = Stream::new("/tmp/hd_stream_a", Params {
+                compile_params: pile_compile::Params {
+                    min_tree_height: 1,
+                    max_block_size: 32,
+                    memory_limit_power: 13,
+                    parallel_config: ParallelConfig::SingleThread,
+                },
+                windows_count: 8,
+            }).unwrap();
+            let mut hd = HashDupl::new(Tokens::new(), backend, Config::default()).unwrap();
+            let mut shingles = Shingles::new();
+
+            // check
+            for (i, text) in texts.iter().enumerate() {
+                hd.shinglify(&***text, &mut shingles).unwrap();
+                let signature = hd.sign(&shingles).unwrap();
+
+                match (i, hd.lookup_best(signature.clone()).unwrap()) {
+                    (ref j, Some(LookupResult { similarity: ref sim, document: ref doc })) if j >= &200 && sim >= &0.99 && doc == text =>
+                        (),
+                    (ref j, Some(LookupResult { similarity: ref sim, .. })) if j < &200 && sim < &0.99 =>
+                        (),
+                    (ref j, None) if j < &200 =>
+                        (),
+                    other =>
+                        panic!("unexpected lookup_best pass #2 result match: {:?}", other),
+                }
+            }
+        }
     }
 }
