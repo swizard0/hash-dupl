@@ -19,6 +19,7 @@ pub struct PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
     state: RunState<D>,
 }
 
+#[derive(Debug)]
 pub enum Error {
     UnsupportedForCurrentMode,
     InMemory,
@@ -40,6 +41,28 @@ impl<D> PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
                 compile: Worker::run(compile),
             }
         })
+    }
+
+    pub fn is_freezed(&self) -> bool {
+        if let RunState::Freezed { .. } = self.state { true } else { false }
+    }
+}
+
+impl<D> Drop for PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+    fn drop(&mut self) {
+        match mem::replace(&mut self.state, RunState::Invalid) {
+            RunState::Invalid =>
+                unreachable!(),
+            RunState::Filling { .. } | RunState::Freezed { .. } =>
+                (),
+            RunState::Freezing { compile: mut pile_backend, .. } =>
+                loop {
+                    if let Ok(Rep::TerminateAck) = pile_backend.rx.recv().unwrap() {
+                        pile_backend.shutdown();
+                        break
+                    }
+                },
+        }
     }
 }
 
@@ -156,6 +179,107 @@ impl<D> Backend for PileRw<D> where D: Serialize + Deserialize + Send + Sync + '
                 self.state = state;
                 Err(Error::UnsupportedForCurrentMode)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+    use bin_merge_pile::merge::ParallelConfig;
+    use super::PileRw;
+    use super::super::pile_compile::Params;
+    use super::super::pile_lookup::PileLookup;
+    use super::super::super::{Backend, SimilarityThresholdFilter, Signature, State, Config};
+
+    #[test]
+    fn save_load_state() {
+        let state = Arc::new(State::new(Config::default()));
+        let mut backend = PileRw::<String>::new("/tmp/pile_rw_a", Params {
+            min_tree_height: 1,
+            max_block_size: 32,
+            memory_limit_power: 13,
+            parallel_config: ParallelConfig::SingleThread,
+        }).unwrap();
+        assert_eq!(backend.load_state().unwrap(), None);
+        backend.save_state(state.clone()).unwrap();
+        assert_eq!(backend.load_state().unwrap().unwrap(), state.clone());
+    }
+
+    #[test]
+    fn insert_lookup_rotate() {
+        let doc_a = Arc::new("some text".to_owned());
+        let doc_b = Arc::new("some other text".to_owned());
+        {
+            let mut backend = PileRw::<String>::new("/tmp/pile_rw_b", Params {
+                min_tree_height: 1,
+                max_block_size: 32,
+                memory_limit_power: 13,
+                parallel_config: ParallelConfig::SingleThread,
+            }).unwrap();
+            backend.insert(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], }), doc_a.clone()).unwrap();
+            backend.insert(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], }), doc_b.clone()).unwrap();
+
+            let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
+                                         Box::new(SimilarityThresholdFilter(0.0)),
+                                         Vec::new()).unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].similarity, 1.0);
+            assert_eq!(results[0].document, doc_a.clone());
+            let results = backend.lookup(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 500, 600, 700], }),
+                                         Box::new(SimilarityThresholdFilter(0.0)),
+                                         Vec::new()).unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].similarity, 1.0);
+            assert_eq!(results[0].document, doc_b.clone());
+            let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }),
+                                         Box::new(SimilarityThresholdFilter(0.0)),
+                                         Vec::new()).unwrap();
+            assert_eq!(results.len(), 2);
+            assert_eq!(results[0].document, doc_a.clone());
+            assert_eq!(results[1].document, doc_b.clone());
+
+            backend.rotate().unwrap();
+
+            let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
+                                         Box::new(SimilarityThresholdFilter(0.0)),
+                                         Vec::new()).unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].similarity, 1.0);
+            assert_eq!(results[0].document, doc_a.clone());
+            let results = backend.lookup(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 500, 600, 700], }),
+                                         Box::new(SimilarityThresholdFilter(0.0)),
+                                         Vec::new()).unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].similarity, 1.0);
+            assert_eq!(results[0].document, doc_b.clone());
+            let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }),
+                                         Box::new(SimilarityThresholdFilter(0.0)),
+                                         Vec::new()).unwrap();
+            assert_eq!(results.len(), 2);
+            assert_eq!(results[0].document, doc_a.clone());
+            assert_eq!(results[1].document, doc_b.clone());
+        }
+        {
+            let mut backend = PileLookup::<String>::new("/tmp/pile_rw_b").unwrap();
+            let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
+                                         Box::new(SimilarityThresholdFilter(0.0)),
+                                         Vec::new()).unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].similarity, 1.0);
+            assert_eq!(results[0].document, doc_a.clone());
+            let results = backend.lookup(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 500, 600, 700], }),
+                                         Box::new(SimilarityThresholdFilter(0.0)),
+                                         Vec::new()).unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].similarity, 1.0);
+            assert_eq!(results[0].document, doc_b.clone());
+            let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 4], bands: vec![300], }),
+                                         Box::new(SimilarityThresholdFilter(0.0)),
+                                         Vec::new()).unwrap();
+            assert_eq!(results.len(), 2);
+            assert_eq!(results[0].document, doc_a.clone());
+            assert_eq!(results[1].document, doc_b.clone());
         }
     }
 }
