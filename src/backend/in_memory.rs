@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use std::clone::Clone;
+use std::hash::Hasher;
+use std::default::Default;
 use std::collections::HashMap;
+use std::collections::hash_state::DefaultState;
 use std::cmp::{PartialEq, PartialOrd, Ordering};
 use slices_merger::SlicesMerger;
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
@@ -36,9 +39,27 @@ impl<D> PartialOrd for DocWithId<D> {
     }
 }
 
+struct DoNothingHasher64(u64);
+
+impl Hasher for DoNothingHasher64 {
+    fn write(&mut self, msg: &[u8]) {
+        self.0 = unsafe { ::std::ptr::read(msg.as_ptr() as *const u64) };
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+impl Default for DoNothingHasher64 {
+    fn default() -> DoNothingHasher64 {
+        DoNothingHasher64(0)
+    }
+}
+
 pub struct InMemory<D> {
     serial: u64,
-    bands_index: HashMap<u64, Vec<DocWithId<D>>>,
+    bands_index: HashMap<u64, Vec<DocWithId<D>>, DefaultState<DoNothingHasher64>>,
     state: Option<Arc<State>>,
     merger: SlicesMerger<DocWithId<D>>,
 }
@@ -47,7 +68,7 @@ impl<D> InMemory<D> {
     pub fn new() -> InMemory<D> {
         InMemory {
             serial: 0,
-            bands_index: HashMap::new(),
+            bands_index: Default::default(),
             state: None,
             merger: SlicesMerger::new(),
         }

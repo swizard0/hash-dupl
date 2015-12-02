@@ -1,3 +1,4 @@
+#![feature(hashmap_hasher)]
 extern crate fnv;
 extern crate rand;
 extern crate time;
