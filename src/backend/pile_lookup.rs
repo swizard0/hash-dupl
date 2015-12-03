@@ -60,7 +60,7 @@ impl<D> PileLookup<D> {
 
         let mut index_filename = base_dir.clone();
         index_filename.push("bands.bin");
-        let bands_index = try!(ntree_bkd::mmap::MmapReader::with_warmup(index_filename).map_err(|e| Error::OpenBandsFile(e)));
+        let bands_index = try!(ntree_bkd::mmap::MmapReader::new(index_filename, true).map_err(|e| Error::OpenBandsFile(e)));
 
         let mut state_filename = base_dir.clone();
         state_filename.push("state.bin");
