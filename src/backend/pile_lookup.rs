@@ -17,7 +17,7 @@ pub struct PileLookup<D> {
     state_filename: PathBuf,
     minhash_file_reader: BufReader<fs::File>,
     docs_file_reader: BufReader<fs::File>,
-    bands_index: ntree_bkd::file::FileReader<BandEntry>,
+    bands_index: ntree_bkd::mmap::MmapReader<BandEntry>,
     merger: SlicesMerger<Offset>,
     _marker: PhantomData<D>,
 }
@@ -31,8 +31,8 @@ pub enum Error {
     OpenDocsFile(PathBuf, io::Error),
     SeekMinhashFile(io::Error),
     SeekDocsFile(io::Error),
-    OpenBandsFile(ntree_bkd::file::Error),
-    BandsLookup(ntree_bkd::file::Error),
+    OpenBandsFile(ntree_bkd::mmap::Error),
+    BandsLookup(ntree_bkd::mmap::Error),
     DeserializeState(rmp_serde::decode::Error),
     DeserializeMinhash(rmp_serde::decode::Error),
     DeserializeDoc(rmp_serde::decode::Error),
@@ -60,7 +60,7 @@ impl<D> PileLookup<D> {
 
         let mut index_filename = base_dir.clone();
         index_filename.push("bands.bin");
-        let bands_index = try!(ntree_bkd::file::FileReader::new(index_filename).map_err(|e| Error::OpenBandsFile(e)));
+        let bands_index = try!(ntree_bkd::mmap::MmapReader::new(index_filename).map_err(|e| Error::OpenBandsFile(e)));
 
         let mut state_filename = base_dir.clone();
         state_filename.push("state.bin");
