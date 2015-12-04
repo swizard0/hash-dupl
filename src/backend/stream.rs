@@ -7,6 +7,7 @@ use std::sync::mpsc::{channel, Sender, Receiver};
 use time;
 use serde::{Serialize, Deserialize};
 use rmp_serde;
+use bin_merge_pile::ntree_bkd;
 use super::worker::{Worker, Req, Rep};
 use super::{pile_rw, pile_lookup, pile_compile};
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
@@ -106,7 +107,19 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
                 continue;
             }
 
-            let mut pile_lookup = try!(pile_lookup::PileLookup::new(&database));
+            // try to open a window
+            let mut pile_lookup = match pile_lookup::PileLookup::new(&database) {
+                Ok(pile) =>
+                    pile,
+                Err(pile_lookup::Error::OpenBandsFile(ntree_bkd::mmap::Error::FileTooSmall)) => {
+                    // database is corrupted: drop window entirely and skip it
+                    let _ = fs::remove_dir_all(&database);
+                    continue
+                },
+                other_err =>
+                    try!(other_err),
+            };
+
             if !try!(pile_lookup.load_state()).is_some() {
                 return Err(Error::MissingStateForWindow(database.clone()))
             }
