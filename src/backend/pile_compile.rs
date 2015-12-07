@@ -249,9 +249,30 @@ mod test {
         {
             let mut checker: ntree_bkd::file::FileReader<BandEntry> =
                 ntree_bkd::file::FileReader::new("/tmp/pile_compile_b/bands.bin").unwrap();
-            let &doc_a_offsets = checker.lookup(&100).unwrap().unwrap().offsets.as_ref().unwrap().get(0).unwrap();
-            let &doc_b_offsets = checker.lookup(&200).unwrap().unwrap().offsets.as_ref().unwrap().get(0).unwrap();
-            let mut both_offsets: Vec<_> = checker.lookup(&300).unwrap().unwrap().offsets.as_ref().unwrap().iter().cloned().collect();
+            let doc_a_offsets = {
+                let keys = &[&100];
+                let mut iter = checker.lookup_iter(keys);
+                match iter.next() {
+                    Ok(Some((_, &BandEntry { offsets: Some(ref o), .. }))) => o.get(0).unwrap().clone(),
+                    other => panic!("{:?}", other),
+                }
+            };
+            let doc_b_offsets = {
+                let keys = &[&200];
+                let mut iter = checker.lookup_iter(keys);
+                match iter.next() {
+                    Ok(Some((_, &BandEntry { offsets: Some(ref o), .. }))) => o.get(0).unwrap().clone(),
+                    other => panic!("{:?}", other),
+                }
+            };
+            let mut both_offsets = {
+                let keys = &[&300];
+                let mut iter = checker.lookup_iter(keys);
+                match iter.next() {
+                    Ok(Some((_, &BandEntry { offsets: Some(ref o), .. }))) => o.clone(),
+                    other => panic!("{:?}", other),
+                }
+            };
             both_offsets.sort();
             assert_eq!(both_offsets, vec![doc_a_offsets, doc_b_offsets]);
 
