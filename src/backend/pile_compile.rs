@@ -250,24 +250,24 @@ mod test {
             let mut checker: ntree_bkd::file::FileReader<BandEntry> =
                 ntree_bkd::file::FileReader::new("/tmp/pile_compile_b/bands.bin").unwrap();
             let doc_a_offsets = {
-                let keys = &[&100];
-                let mut iter = checker.lookup_iter(keys);
+                let keys = [100];
+                let mut iter = checker.lookup_iter(keys.iter());
                 match iter.next() {
                     Ok(Some((_, &BandEntry { offsets: Some(ref o), .. }))) => o.get(0).unwrap().clone(),
                     other => panic!("{:?}", other),
                 }
             };
             let doc_b_offsets = {
-                let keys = &[&200];
-                let mut iter = checker.lookup_iter(keys);
+                let keys = [200];
+                let mut iter = checker.lookup_iter(keys.iter());
                 match iter.next() {
                     Ok(Some((_, &BandEntry { offsets: Some(ref o), .. }))) => o.get(0).unwrap().clone(),
                     other => panic!("{:?}", other),
                 }
             };
             let mut both_offsets = {
-                let keys = &[&300];
-                let mut iter = checker.lookup_iter(keys);
+                let keys = [300];
+                let mut iter = checker.lookup_iter(keys.iter());
                 match iter.next() {
                     Ok(Some((_, &BandEntry { offsets: Some(ref o), .. }))) => o.clone(),
                     other => panic!("{:?}", other),
