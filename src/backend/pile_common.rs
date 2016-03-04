@@ -105,7 +105,7 @@ impl Deserialize for State {
     fn deserialize<D>(deserializer: &mut D) -> Result<State, D::Error> where D: Deserializer {
         let magic: u64 = try!(Deserialize::deserialize(deserializer));
         if magic != STATE_MAGIC {
-            return Err(de::Error::syntax(&format!("invalid state magic: {}, expected: {}", magic, STATE_MAGIC)))
+            return Err(de::Error::custom(&format!("invalid state magic: {}, expected: {}", magic, STATE_MAGIC)))
         }
         let shingle_length = try!(Deserialize::deserialize(deserializer));
         let signature_length = try!(Deserialize::deserialize(deserializer));
