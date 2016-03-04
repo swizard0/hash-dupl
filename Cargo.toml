@@ -9,7 +9,7 @@ tokenizer = { git = "https://bitbucket.org/swizard/tokenizer.git" }
 token-ngrams = { git = "git://dev.swizard.info/token-ngrams" }
 slices-merger = { git = "git://dev.swizard.info/slices-merger" }
 rmp-serde = "0.8"
-serde = "0.7"
+serde = "0.6"
 time = "0.1"
 rand = "0.3"
 fnv = "1.0"
