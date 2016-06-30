@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use std::clone::Clone;
-use std::hash::Hasher;
+use std::hash::{Hasher, BuildHasherDefault};
 use std::default::Default;
 use std::collections::HashMap;
-use std::collections::hash_state::DefaultState;
 use std::cmp::{PartialEq, PartialOrd, Ordering};
 use slices_merger::SlicesMerger;
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
@@ -59,7 +58,7 @@ impl Default for DoNothingHasher64 {
 
 pub struct InMemory<D> {
     serial: u64,
-    bands_index: HashMap<u64, Vec<DocWithId<D>>, DefaultState<DoNothingHasher64>>,
+    bands_index: HashMap<u64, Vec<DocWithId<D>>, BuildHasherDefault<DoNothingHasher64>>,
     state: Option<Arc<State>>,
     merger: SlicesMerger<DocWithId<D>>,
 }
