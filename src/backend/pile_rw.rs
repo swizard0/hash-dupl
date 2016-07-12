@@ -18,6 +18,7 @@ enum RunState<D> where D: Serialize + Deserialize + Send + Sync + 'static {
 
 pub struct PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
     database_dir: Arc<PathBuf>,
+    lookup_params: pile_lookup::Params,
     state: RunState<D>,
 }
 
@@ -30,7 +31,9 @@ pub enum Error {
 }
 
 impl<D> PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
-    pub fn new<P>(database_dir: P, compile_params: pile_compile::Params) -> Result<PileRw<D>, Error> where P: AsRef<Path> {
+    pub fn new<P>(database_dir: P, lookup_params: pile_lookup::Params, compile_params: pile_compile::Params) ->
+        Result<PileRw<D>, Error> where P: AsRef<Path>
+    {
         let mut base_dir = PathBuf::new();
         base_dir.push(&database_dir);
 
@@ -38,6 +41,7 @@ impl<D> PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
         let compile = try!(pile_compile::PileCompile::new(&base_dir, compile_params).map_err(|e| Error::PileCompile(e)));
         Ok(PileRw {
             database_dir: Arc::new(base_dir),
+            lookup_params: lookup_params,
             state: RunState::Filling {
                 in_memory: Worker::run(in_memory),
                 compile: Worker::run(compile),
@@ -134,10 +138,11 @@ impl<D> Backend for PileRw<D> where D: Serialize + Deserialize + Send + Sync + '
                         Ok(Ok(Rep::TerminateAck)) => {
                             pile_compile.shutdown();
                             let database_dir_copy = self.database_dir.clone();
+                            let lookup_params_copy = self.lookup_params.clone();
                             let (tx, rx) = channel();
                             spawn(move || {
                                 mem::drop(pile_compile);
-                                tx.send(pile_lookup::PileLookup::new(&**database_dir_copy)).unwrap();
+                                tx.send(pile_lookup::PileLookup::new(&**database_dir_copy, lookup_params_copy)).unwrap();
                             });
                             self.state = RunState::Switching { in_memory: mem_backend, rx: rx, };
                         },
@@ -226,19 +231,21 @@ mod test {
     use std::sync::Arc;
     use bin_merge_pile::merge::ParallelConfig;
     use super::PileRw;
-    use super::super::pile_compile::Params;
-    use super::super::pile_lookup::PileLookup;
+    use super::super::{pile_compile, pile_lookup};
     use super::super::super::{Backend, SimilarityThresholdFilter, Signature, State, Config};
 
     #[test]
     fn save_load_state() {
         let state = Arc::new(State::new(Config::default()));
-        let mut backend = PileRw::<String>::new("/tmp/pile_rw_a", Params {
-            min_tree_height: 1,
-            max_block_size: 32,
-            memory_limit_power: 13,
-            parallel_config: ParallelConfig::SingleThread,
-        }).unwrap();
+        let mut backend = PileRw::<String>::new(
+            "/tmp/pile_rw_a",
+            Default::default(),
+            pile_compile::Params {
+                min_tree_height: 1,
+                max_block_size: 32,
+                memory_limit_power: 13,
+                parallel_config: ParallelConfig::SingleThread,
+            }).unwrap();
         assert_eq!(backend.load_state().unwrap(), None);
         backend.save_state(state.clone()).unwrap();
         assert_eq!(backend.load_state().unwrap().unwrap(), state.clone());
@@ -249,12 +256,15 @@ mod test {
         let doc_a = Arc::new("some text".to_owned());
         let doc_b = Arc::new("some other text".to_owned());
         {
-            let mut backend = PileRw::<String>::new("/tmp/pile_rw_b", Params {
-                min_tree_height: 1,
-                max_block_size: 32,
-                memory_limit_power: 13,
-                parallel_config: ParallelConfig::SingleThread,
-            }).unwrap();
+            let mut backend = PileRw::<String>::new(
+                "/tmp/pile_rw_b",
+                Default::default(),
+                pile_compile::Params {
+                    min_tree_height: 1,
+                    max_block_size: 32,
+                    memory_limit_power: 13,
+                    parallel_config: ParallelConfig::SingleThread,
+                }).unwrap();
             backend.insert(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], }), doc_a.clone()).unwrap();
             backend.insert(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], }), doc_b.clone()).unwrap();
 
@@ -299,7 +309,7 @@ mod test {
             assert_eq!(results[1].document, doc_b.clone());
         }
         {
-            let mut backend = PileLookup::<String>::new("/tmp/pile_rw_b").unwrap();
+            let mut backend = pile_lookup::PileLookup::<String>::new("/tmp/pile_rw_b", Default::default()).unwrap();
             let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
                                          Box::new(SimilarityThresholdFilter(0.0)),
                                          Vec::new()).unwrap();

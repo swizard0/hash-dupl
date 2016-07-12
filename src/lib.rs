@@ -474,12 +474,15 @@ mod test {
 
     #[test]
     fn insert_lookup_basic_pile_rw() {
-        backend_insert_lookup_basic(PileRw::new("/tmp/hd_pile_rw_a", pile_compile::Params {
-            min_tree_height: 1,
-            max_block_size: 32,
-            memory_limit_power: 13,
-            parallel_config: ParallelConfig::SingleThread,
-        }).unwrap());
+        backend_insert_lookup_basic(PileRw::new(
+            "/tmp/hd_pile_rw_a",
+            Default::default(),
+            pile_compile::Params {
+                min_tree_height: 1,
+                max_block_size: 32,
+                memory_limit_power: 13,
+                parallel_config: ParallelConfig::SingleThread,
+            }).unwrap());
     }
 
     fn gen_text() -> String {
@@ -494,6 +497,7 @@ mod test {
         {
             let _ = fs::remove_dir_all("/tmp/hd_stream_a");
             let backend = Stream::new("/tmp/hd_stream_a", Params {
+                lookup_params: Default::default(),
                 compile_params: pile_compile::Params {
                     min_tree_height: 1,
                     max_block_size: 32,
@@ -541,6 +545,7 @@ mod test {
         }
         {
             let backend = Stream::new("/tmp/hd_stream_a", Params {
+                lookup_params: Default::default(),
                 compile_params: pile_compile::Params {
                     min_tree_height: 1,
                     max_block_size: 32,

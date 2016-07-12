@@ -12,6 +12,19 @@ use rmp_serde::Deserializer;
 use super::pile_common::{Offset, BandEntry};
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
 
+#[derive(Clone, Copy)]
+pub struct Params {
+    pub mmap_type: ntree_bkd::mmap::MmapType,
+}
+
+impl Default for Params {
+    fn default() -> Params {
+        Params {
+            mmap_type: ntree_bkd::mmap::MmapType::TrueMmap { madv_willneed: true, },
+        }
+    }
+}
+
 pub struct PileLookup<D> {
     state: Option<Arc<State>>,
     state_filename: PathBuf,
@@ -40,7 +53,7 @@ pub enum Error {
 }
 
 impl<D> PileLookup<D> {
-    pub fn new<P>(database_dir: P) -> Result<PileLookup<D>, Error> where P: AsRef<Path> {
+    pub fn new<P>(database_dir: P, params: Params) -> Result<PileLookup<D>, Error> where P: AsRef<Path> {
         let mut base_dir = PathBuf::new();
         base_dir.push(&database_dir);
 
@@ -60,7 +73,7 @@ impl<D> PileLookup<D> {
 
         let mut index_filename = base_dir.clone();
         index_filename.push("bands.bin");
-        let bands_index = try!(ntree_bkd::mmap::MmapReader::new(index_filename, true).map_err(|e| Error::OpenBandsFile(e)));
+        let bands_index = try!(ntree_bkd::mmap::MmapReader::new(index_filename, params.mmap_type).map_err(|e| Error::OpenBandsFile(e)));
 
         let mut state_filename = base_dir.clone();
         state_filename.push("state.bin");
@@ -158,7 +171,7 @@ mod test {
             backend.save_state(state.clone()).unwrap();
         }
         {
-            let mut backend = PileLookup::<String>::new("/tmp/pile_lookup_a").unwrap();
+            let mut backend = PileLookup::<String>::new("/tmp/pile_lookup_a", Default::default()).unwrap();
             assert_eq!(backend.load_state().unwrap().unwrap(), state.clone());
         }
     }
@@ -178,7 +191,7 @@ mod test {
             backend.insert(Arc::new(Signature { minhash: vec![4, 5, 6], bands: vec![200, 300, 500], }), doc_b.clone()).unwrap();
         }
         {
-            let mut backend = PileLookup::<String>::new("/tmp/pile_lookup_b").unwrap();
+            let mut backend = PileLookup::<String>::new("/tmp/pile_lookup_b", Default::default()).unwrap();
             let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
                                          Box::new(SimilarityThresholdFilter(0.0)),
                                          Vec::new()).unwrap();

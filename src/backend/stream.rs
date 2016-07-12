@@ -15,12 +15,17 @@ use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, St
 #[derive(Clone, Copy)]
 pub struct Params {
     pub compile_params: pile_compile::Params,
+    pub lookup_params: pile_lookup::Params,
     pub windows_count: usize,
 }
 
 impl Default for Params {
     fn default() -> Params {
-        Params { compile_params: Default::default(), windows_count: 32, }
+        Params {
+            compile_params: Default::default(),
+            lookup_params: Default::default(),
+            windows_count: 32,
+        }
     }
 }
 
@@ -108,7 +113,7 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
             }
 
             // try to open a window
-            let mut pile_lookup = match pile_lookup::PileLookup::new(&database) {
+            let mut pile_lookup = match pile_lookup::PileLookup::new(&database, params.lookup_params.clone()) {
                 Ok(pile) =>
                     pile,
                 Err(pile_lookup::Error::OpenBandsFile(ntree_bkd::mmap::Error::FileTooSmall)) => {
@@ -195,7 +200,7 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
             index += 1;
         }
 
-        let mut pile_rw = try!(pile_rw::PileRw::new(&database_dir, self.params.compile_params.clone()));
+        let mut pile_rw = try!(pile_rw::PileRw::new(&database_dir, self.params.lookup_params.clone(), self.params.compile_params.clone()));
         if let Some(state) = common_state.take() {
             try!(pile_rw.save_state(state.clone()));
             if self.state.is_none() {
@@ -348,6 +353,7 @@ mod test {
                 parallel_config: ParallelConfig::SingleThread,
             },
             windows_count: 3,
+            .. Default::default()
         }).unwrap();
         assert_eq!(backend.load_state().unwrap(), None);
         backend.save_state(state.clone()).unwrap();
@@ -369,6 +375,7 @@ mod test {
                     parallel_config: ParallelConfig::SingleThread,
                 },
                 windows_count: 3,
+                .. Default::default()
             }).unwrap();
             backend.save_state(Arc::new(State::new(Config::default()))).unwrap();
             backend.insert(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 300, 400], }), doc_a.clone()).unwrap();
@@ -432,6 +439,7 @@ mod test {
                     parallel_config: ParallelConfig::SingleThread,
                 },
                 windows_count: 3,
+                .. Default::default()
             }).unwrap();
             let results = backend.lookup(Arc::new(Signature { minhash: vec![1, 2, 3], bands: vec![100, 400], }),
                                          Box::new(SimilarityThresholdFilter(0.0)),
