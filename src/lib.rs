@@ -298,11 +298,11 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
             Config { band_min_probability: p, .. } if p < 0.0 || p > 1.0 =>
                 Err(Error::Config(ConfigError::InvalidBandMinProbabilityRange)),
             config => {
-                let state = match try!(backend.load_state().map_err(|e| Error::Backend(e))) {
+                let state = match try!(backend.load_state().map_err(Error::Backend)) {
                     Some(state) => state,
                     None => {
                         let new_state = Arc::new(State::new(config));
-                        try!(backend.save_state(new_state.clone()).map_err(|e| Error::Backend(e)));
+                        try!(backend.save_state(new_state.clone()).map_err(Error::Backend));
                         new_state
                     }
                 };
@@ -325,7 +325,7 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
     }
 
     pub fn shinglify<'a, T>(&mut self, text: T, shingles: &'a mut Shingles) -> Result<&'a Shingles, Error<SE, BE>> where T: Deref<Target = str> {
-        self.shingler.shinglify(&text, self.state.config.shingle_length, shingles).map_err(|e| Error::Shingler(e))
+        self.shingler.shinglify(&text, self.state.config.shingle_length, shingles).map_err(Error::Shingler)
     }
 
     pub fn sign<'a>(&mut self, shingles: &Shingles) -> Result<Arc<Signature>, Error<SE, BE>> {
@@ -369,7 +369,7 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
     }
 
     pub fn insert(&mut self, signature: Arc<Signature>, document: Arc<D>) -> Result<(), Error<SE, BE>> {
-        self.backend.insert(signature, document).map_err(|e| Error::Backend(e))
+        self.backend.insert(signature, document).map_err(Error::Backend)
     }
 
     pub fn lookup_best(&mut self, signature: Arc<Signature>) -> Result<Option<LookupResult<D>>, Error<SE, BE>> {

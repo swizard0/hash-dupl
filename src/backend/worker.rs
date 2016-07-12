@@ -122,16 +122,16 @@ impl<B, E> Backend for Worker<B, E> where B: Backend, E: fmt::Debug + From<B::Er
         where F: CandidatesFilter + Clone, C: CandidatesCollector<Error = CE, Document = B::Document, Result = CR>
     {
         if self.redirect_lookup {
-            return collector.finish().map_err(|e| LookupError::Collector(e))
+            return collector.finish().map_err(LookupError::Collector)
         }
 
         self.tx.send(Req::Lookup(signature, Box::new(filter))).unwrap();
         loop {
             match self.rx.recv() {
                 Ok(Ok(Rep::LookupResult(similarity, doc))) =>
-                    try!(collector.receive(similarity, doc).map_err(|e| LookupError::Collector(e))),
+                    try!(collector.receive(similarity, doc).map_err(LookupError::Collector)),
                 Ok(Ok(Rep::LookupFinish)) =>
-                    return collector.finish().map_err(|e| LookupError::Collector(e)),
+                    return collector.finish().map_err(LookupError::Collector),
                 Ok(Err(e)) =>
                     return Err(LookupError::Backend(e)),
                 other =>

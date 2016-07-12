@@ -73,7 +73,7 @@ impl<D> PileLookup<D> {
 
         let mut index_filename = base_dir.clone();
         index_filename.push("bands.bin");
-        let bands_index = try!(ntree_bkd::mmap::MmapReader::new(index_filename, params.mmap_type).map_err(|e| Error::OpenBandsFile(e)));
+        let bands_index = try!(ntree_bkd::mmap::MmapReader::new(index_filename, params.mmap_type).map_err(Error::OpenBandsFile));
 
         let mut state_filename = base_dir.clone();
         state_filename.push("state.bin");
@@ -105,7 +105,7 @@ impl<D> Backend for PileLookup<D> where D: Deserialize {
             match fs::File::open(&self.state_filename) {
                 Ok(mut state_file) => {
                     let mut deserializer = rmp_serde::Deserializer::new(&mut state_file);
-                    let state = try!(Deserialize::deserialize(&mut deserializer).map_err(|e| Error::DeserializeState(e)));
+                    let state = try!(Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeState));
                     self.state = Some(state);
                     Ok(self.state.as_ref().map(|s| s.clone()))
                 },
@@ -142,11 +142,11 @@ impl<D> Backend for PileLookup<D> where D: Deserialize {
                     SeekFrom::Start(offsets.doc_offset)).map_err(|e| LookupError::Backend(Error::SeekDocsFile(e))));
                 let doc: Arc<D> = try!(Deserialize::deserialize(
                     &mut Deserializer::new(&mut self.docs_file_reader)).map_err(|e| LookupError::Backend(Error::DeserializeDoc(e))));
-                try!(collector.receive(similarity, doc).map_err(|e| LookupError::Collector(e)));
+                try!(collector.receive(similarity, doc).map_err(LookupError::Collector));
             }
         }
 
-        collector.finish().map_err(|e| LookupError::Collector(e))
+        collector.finish().map_err(LookupError::Collector)
     }
 }
 

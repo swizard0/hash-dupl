@@ -86,7 +86,7 @@ impl<D> PileCompile<D> where D: Serialize + Send + Sync + 'static {
 
         let mut index_filename = base_dir.clone();
         index_filename.push("bands.bin");
-        let index_ntree = try!(ntree_bkd::file::FileWriter::new(index_filename).map_err(|e| Error::CreateBandsFile(e)));
+        let index_ntree = try!(ntree_bkd::file::FileWriter::new(index_filename).map_err(Error::CreateBandsFile));
 
         let index_tape = merge::BinMergeTape::with_params(
             reduce::ReducerTapesCreator::new(
@@ -136,7 +136,7 @@ impl<D> Backend for PileCompile<D> {
 
     fn save_state(&mut self, state: Arc<State>) -> Result<(), Error> {
         let mut state_file = try!(fs::File::create(&self.state_filename).map_err(|e| Error::CreateStateFile(self.state_filename.clone(), e)));
-        state.serialize(&mut rmp_serde::Serializer::new(&mut state_file)).map_err(|e| Error::SerializeState(e))
+        state.serialize(&mut rmp_serde::Serializer::new(&mut state_file)).map_err(Error::SerializeState)
     }
 
     fn load_state(&mut self) -> Result<Option<Arc<State>>, Error> {
@@ -171,16 +171,16 @@ fn indexer_loop<D, PC>(mut index_tape: merge::BinMergeTape<PC>,
     loop {
         match rx.recv().unwrap() {
             IndexCommand::Insert(signature, document) => {
-                let minhash_offset = try!(minhash_file_writer.seek(SeekFrom::Current(0)).map_err(|e| Error::SeekMinhashFile(e)));
-                let doc_offset = try!(docs_file_writer.seek(SeekFrom::Current(0)).map_err(|e| Error::SeekDocsFile(e)));
-                try!(signature.minhash.serialize(&mut rmp_serde::Serializer::new(&mut minhash_file_writer)).map_err(|e| Error::SerializeMinhash(e)));
-                try!(document.serialize(&mut rmp_serde::Serializer::new(&mut docs_file_writer)).map_err(|e| Error::SerializeDoc(e)));
+                let minhash_offset = try!(minhash_file_writer.seek(SeekFrom::Current(0)).map_err(Error::SeekMinhashFile));
+                let doc_offset = try!(docs_file_writer.seek(SeekFrom::Current(0)).map_err(Error::SeekDocsFile));
+                try!(signature.minhash.serialize(&mut rmp_serde::Serializer::new(&mut minhash_file_writer)).map_err(Error::SerializeMinhash));
+                try!(document.serialize(&mut rmp_serde::Serializer::new(&mut docs_file_writer)).map_err(Error::SerializeDoc));
                 for &band in signature.bands.iter() {
-                    try!(index_tape.add(BandEntry::entry(band, minhash_offset, doc_offset)).map_err(|e| Error::TapeAdd(e)))
+                    try!(index_tape.add(BandEntry::entry(band, minhash_offset, doc_offset)).map_err(Error::TapeAdd))
                 }
             },
             IndexCommand::Finish => {
-                try!(match try!(index_tape.finish().map_err(|e| Error::TapeFinish(e))) {
+                try!(match try!(index_tape.finish().map_err(Error::TapeFinish)) {
                     Some((index_iter, index_len)) =>
                         index_ntree.build(index_iter, index_len, min_tree_height, max_block_size),
                     None =>

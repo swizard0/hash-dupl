@@ -114,11 +114,11 @@ impl<D> Backend for InMemory<D> {
 
         for &DocWithId { entry: ref e, .. } in self.merger.iter() {
             if let Some(similarity) = filter.accept_minhash_similarity(&signature.minhash, &e.minhash) {
-                try!(collector.receive(similarity, e.doc.clone()).map_err(|e| LookupError::Collector(e)));
+                try!(collector.receive(similarity, e.doc.clone()).map_err(LookupError::Collector));
             }
         }
 
-        collector.finish().map_err(|e| LookupError::Collector(e))
+        collector.finish().map_err(LookupError::Collector)
     }
 }
 

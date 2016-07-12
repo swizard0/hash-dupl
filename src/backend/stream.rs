@@ -134,8 +134,8 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
             let mut saved_at_file = try!(fs::File::open(&saved_at_filename).map_err(|e| Error::OpenSavedAtFile(saved_at_filename, e)));
             let mut deserializer = rmp_serde::Deserializer::new(&mut saved_at_file);
             let saved_at = time::Timespec {
-                sec: try!(Deserialize::deserialize(&mut deserializer).map_err(|e| Error::DeserializeSavedAt(e))),
-                nsec: try!(Deserialize::deserialize(&mut deserializer).map_err(|e| Error::DeserializeSavedAt(e))),
+                sec: try!(Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeSavedAt)),
+                nsec: try!(Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeSavedAt)),
             };
 
             windows_backends.push(InnerWindow {
@@ -214,8 +214,8 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
             saved_at_filename.push("saved_at.bin");
             let mut saved_at_file = try!(fs::File::create(&saved_at_filename).map_err(|e| Error::CreateSavedAtFile(saved_at_filename, e)));
             let mut serializer = rmp_serde::Serializer::new(&mut saved_at_file);
-            try!(saved_at.sec.serialize(&mut serializer).map_err(|e| Error::SerializeSavedAt(e)));
-            try!(saved_at.nsec.serialize(&mut serializer).map_err(|e| Error::SerializeSavedAt(e)));
+            try!(saved_at.sec.serialize(&mut serializer).map_err(Error::SerializeSavedAt));
+            try!(saved_at.nsec.serialize(&mut serializer).map_err(Error::SerializeSavedAt));
         }
 
         self.rw_window = Some(InnerWindow {
@@ -279,7 +279,7 @@ impl<D> Backend for Stream<D> where D: Serialize + Deserialize + Send + Sync + '
         while waiting_replies > 0 {
             match self.lookup_rx.recv() {
                 Ok(Ok(Rep::LookupResult(similarity, doc))) =>
-                    try!(collector.receive(similarity, doc).map_err(|e| LookupError::Collector(e))),
+                    try!(collector.receive(similarity, doc).map_err(LookupError::Collector)),
                 Ok(Ok(Rep::LookupFinish)) =>
                     waiting_replies -= 1,
                 Ok(Err(e)) => {
@@ -294,7 +294,7 @@ impl<D> Backend for Stream<D> where D: Serialize + Deserialize + Send + Sync + '
         if let Some(error) = error_occurred {
             Err(error)
         } else {
-            collector.finish().map_err(|e| LookupError::Collector(e))
+            collector.finish().map_err(LookupError::Collector)
         }
     }
 
