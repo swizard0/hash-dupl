@@ -108,7 +108,7 @@ impl<D> Backend for InMemory<D> {
         self.merger.reset();
         for band in signature.bands.iter() {
             if let Some(docs) = self.bands_index.get(band) {
-                self.merger.add(&docs);
+                self.merger.add(docs.iter().cloned());
             }
         }
 

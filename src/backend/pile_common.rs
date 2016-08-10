@@ -145,7 +145,7 @@ impl<E> Reducer<BandEntry, E> for BandEntriesReducer<E> where E: Send + Sync + '
             match (existing.offsets.take(), incoming.offsets) {
                 (Some(e_offsets), Some(i_offsets)) => {
                     let mut merger = SlicesMerger::from(i_offsets);
-                    merger.add(&e_offsets);
+                    merger.add(e_offsets.into_iter());
                     Some(merger.finish())
                 },
                 (Some(e_offsets), None) =>

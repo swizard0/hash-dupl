@@ -128,7 +128,7 @@ impl<D> Backend for PileLookup<D> where D: Deserialize {
         let mut index_iter = self.bands_index.lookup_iter(signature.bands.iter());
         while let Some((_, entry)) = try!(index_iter.next().map_err(|e| LookupError::Backend(Error::BandsLookup(e)))) {
             if let Some(ref offsets) = entry.offsets {
-                self.merger.add(offsets)
+                self.merger.add(offsets.iter().cloned())
             }
         }
 
