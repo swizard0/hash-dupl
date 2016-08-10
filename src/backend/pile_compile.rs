@@ -54,9 +54,9 @@ pub enum Error {
     SeekDocsFile(io::Error),
     CreateStateFile(PathBuf, io::Error),
     CreateBandsFile(ntree_bkd::file::Error),
-    TapeAdd(file::Error),
-    TapeFinish(file::Error),
-    TapeIter(file::Error),
+    TapeAdd(reduce::Error<file::Error, ()>),
+    TapeFinish(reduce::Error<file::Error, ()>),
+    TapeIter(reduce::Error<file::Error, ()>),
     NTreeBuild(ntree_bkd::file::Error),
     SerializeState(rmp_serde::encode::Error),
     SerializeDoc(rmp_serde::encode::Error),
@@ -164,7 +164,7 @@ fn indexer_loop<D, PC>(mut index_tape: merge::BinMergeTape<PC>,
                        minhash_file: fs::File,
                        tx: Sender<()>,
                        rx: Receiver<IndexCommand<D>>) -> Result<(), Error>
-    where D: Serialize, PC: merge::TapesCreator<Item = BandEntry, Error = file::Error>
+    where D: Serialize, PC: merge::TapesCreator<Item = BandEntry, Error = reduce::Error<file::Error, ()>>
 {
     let mut docs_file_writer = io::BufWriter::new(docs_file);
     let mut minhash_file_writer = io::BufWriter::new(minhash_file);

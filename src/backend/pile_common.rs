@@ -139,8 +139,10 @@ impl<E> BandEntriesReducer<E> {
     }
 }
 
-impl<E> Reducer<BandEntry, E> for BandEntriesReducer<E> where E: Send + Sync + 'static {
-    fn reduce(&self, existing: &mut BandEntry, incoming: BandEntry) -> Result<(), E> {
+impl<E> Reducer<BandEntry> for BandEntriesReducer<E> where E: Send + Sync + 'static {
+    type Error = E;
+
+    fn reduce(&self, existing: &mut BandEntry, incoming: BandEntry) -> Result<(), Self::Error> {
         existing.offsets =
             match (existing.offsets.take(), incoming.offsets) {
                 (Some(e_offsets), Some(i_offsets)) => {
