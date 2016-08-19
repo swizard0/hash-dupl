@@ -1,6 +1,6 @@
 [package]
 name = "hash-dupl"
-version = "0.3.3"
+version = "0.3.4"
 authors = ["Alexey Voznyuk <me@swizard.info>"]
 
 [dependencies]
@@ -9,7 +9,7 @@ tokenizer = { git = "https://bitbucket.org/swizard/tokenizer.git" }
 token-ngrams = { git = "https://github.com/swizard0/token-ngrams.git" }
 slices-merger = { git = "https://github.com/swizard0/slices-merger.git" }
 rmp-serde = "0.9"
-serde = "0.7"
+serde = "0.8"
 time = "0.1"
 rand = "0.3"
 fnv = "1.0"
