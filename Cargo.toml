@@ -1,6 +1,6 @@
 [package]
 name = "hash-dupl"
-version = "0.3.5"
+version = "0.3.6"
 authors = ["Alexey Voznyuk <me@swizard.info>"]
 
 [dependencies]

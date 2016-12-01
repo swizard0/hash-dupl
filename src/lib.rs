@@ -229,6 +229,14 @@ impl Shingles {
     }
 }
 
+impl Deref for Shingles {
+    type Target = [u64];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 pub trait Shingler {
     type Error;
 
