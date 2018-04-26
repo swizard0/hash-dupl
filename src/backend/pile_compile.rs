@@ -75,18 +75,18 @@ impl<D> PileCompile<D> where D: Serialize + Send + Sync + 'static {
             Err(e) => return Err(Error::RemoveDatabaseDir(base_dir, e)),
         }
 
-        try!(fs::create_dir(&database_dir).map_err(|e| Error::CreateDatabaseDir(base_dir.clone(), e)));
+        fs::create_dir(&database_dir).map_err(|e| Error::CreateDatabaseDir(base_dir.clone(), e))?;
         let mut docs_filename = base_dir.clone();
         docs_filename.push("docs.bin");
-        let docs_file = try!(fs::File::create(&docs_filename).map_err(|e| Error::CreateDocsFile(docs_filename, e)));
+        let docs_file = fs::File::create(&docs_filename).map_err(|e| Error::CreateDocsFile(docs_filename, e))?;
 
         let mut minhash_filename = base_dir.clone();
         minhash_filename.push("minhash.bin");
-        let minhash_file = try!(fs::File::create(&minhash_filename).map_err(|e| Error::CreateMinhashFile(minhash_filename, e)));
+        let minhash_file = fs::File::create(&minhash_filename).map_err(|e| Error::CreateMinhashFile(minhash_filename, e))?;
 
         let mut index_filename = base_dir.clone();
         index_filename.push("bands.bin");
-        let index_ntree = try!(ntree_bkd::file::FileWriter::new(index_filename).map_err(Error::CreateBandsFile));
+        let index_ntree = ntree_bkd::file::FileWriter::new(index_filename).map_err(Error::CreateBandsFile)?;
 
         let index_tape = merge::BinMergeTape::with_params(
             reduce::ReducerTapesCreator::new(
@@ -135,7 +135,7 @@ impl<D> Backend for PileCompile<D> {
     type Document = D;
 
     fn save_state(&mut self, state: Arc<State>) -> Result<(), Error> {
-        let mut state_file = try!(fs::File::create(&self.state_filename).map_err(|e| Error::CreateStateFile(self.state_filename.clone(), e)));
+        let mut state_file = fs::File::create(&self.state_filename).map_err(|e| Error::CreateStateFile(self.state_filename.clone(), e))?;
         state.serialize(&mut rmp_serde::Serializer::new(&mut state_file)).map_err(Error::SerializeState)
     }
 
@@ -171,16 +171,16 @@ fn indexer_loop<D, PC>(mut index_tape: merge::BinMergeTape<PC>,
     loop {
         match rx.recv().unwrap() {
             IndexCommand::Insert(signature, document) => {
-                let minhash_offset = try!(minhash_file_writer.seek(SeekFrom::Current(0)).map_err(Error::SeekMinhashFile));
-                let doc_offset = try!(docs_file_writer.seek(SeekFrom::Current(0)).map_err(Error::SeekDocsFile));
-                try!(signature.minhash.serialize(&mut rmp_serde::Serializer::new(&mut minhash_file_writer)).map_err(Error::SerializeMinhash));
-                try!(document.serialize(&mut rmp_serde::Serializer::new(&mut docs_file_writer)).map_err(Error::SerializeDoc));
+                let minhash_offset = minhash_file_writer.seek(SeekFrom::Current(0)).map_err(Error::SeekMinhashFile)?;
+                let doc_offset = docs_file_writer.seek(SeekFrom::Current(0)).map_err(Error::SeekDocsFile)?;
+                signature.minhash.serialize(&mut rmp_serde::Serializer::new(&mut minhash_file_writer)).map_err(Error::SerializeMinhash)?;
+                document.serialize(&mut rmp_serde::Serializer::new(&mut docs_file_writer)).map_err(Error::SerializeDoc)?;
                 for &band in signature.bands.iter() {
-                    try!(index_tape.add(BandEntry::entry(band, minhash_offset, doc_offset)).map_err(Error::TapeAdd))
+                    index_tape.add(BandEntry::entry(band, minhash_offset, doc_offset)).map_err(Error::TapeAdd)?;
                 }
             },
             IndexCommand::Finish => {
-                try!(match try!(index_tape.finish().map_err(Error::TapeFinish)) {
+                match try!(index_tape.finish().map_err(Error::TapeFinish)) {
                     Some((index_iter, index_len)) =>
                         index_ntree.build(index_iter, index_len, min_tree_height, max_block_size),
                     None =>
@@ -188,7 +188,7 @@ fn indexer_loop<D, PC>(mut index_tape: merge::BinMergeTape<PC>,
                 }.map_err(|err| match err {
                     ntree::BuildError::Iter(e) => Error::TapeIter(e),
                     ntree::BuildError::NTree(e) => Error::NTreeBuild(e),
-                }));
+                })?;
                 tx.send(()).unwrap();
                 return Ok(())
             },

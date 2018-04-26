@@ -65,15 +65,15 @@ impl<D> PileLookup<D> {
 
         let mut minhash_filename = base_dir.clone();
         minhash_filename.push("minhash.bin");
-        let minhash_file = try!(fs::File::open(&minhash_filename).map_err(|e| Error::OpenMinhashFile(minhash_filename, e)));
+        let minhash_file = fs::File::open(&minhash_filename).map_err(|e| Error::OpenMinhashFile(minhash_filename, e))?;
 
         let mut docs_filename = base_dir.clone();
         docs_filename.push("docs.bin");
-        let docs_file = try!(fs::File::open(&docs_filename).map_err(|e| Error::OpenDocsFile(docs_filename, e)));
+        let docs_file = fs::File::open(&docs_filename).map_err(|e| Error::OpenDocsFile(docs_filename, e))?;
 
         let mut index_filename = base_dir.clone();
         index_filename.push("bands.bin");
-        let bands_index = try!(ntree_bkd::mmap::MmapReader::new(index_filename, params.mmap_type).map_err(Error::OpenBandsFile));
+        let bands_index = ntree_bkd::mmap::MmapReader::new(index_filename, params.mmap_type).map_err(Error::OpenBandsFile)?;
 
         let mut state_filename = base_dir.clone();
         state_filename.push("state.bin");
@@ -105,7 +105,7 @@ impl<'a, D> Backend for PileLookup<D> where D: Deserialize<'a> {
             match fs::File::open(&self.state_filename) {
                 Ok(mut state_file) => {
                     let mut deserializer = rmp_serde::Deserializer::new(&mut state_file);
-                    let state = Arc::new(try!(Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeState)));
+                    let state = Arc::new(Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeState)?);
                     self.state = Some(state);
                     Ok(self.state.as_ref().map(|s| s.clone()))
                 },
@@ -126,23 +126,23 @@ impl<'a, D> Backend for PileLookup<D> where D: Deserialize<'a> {
     {
         self.merger.reset();
         let mut index_iter = self.bands_index.lookup_iter(signature.bands.iter());
-        while let Some((_, entry)) = try!(index_iter.next().map_err(|e| LookupError::Backend(Error::BandsLookup(e)))) {
+        while let Some((_, entry)) = index_iter.next().map_err(|e| LookupError::Backend(Error::BandsLookup(e)))? {
             if let Some(ref offsets) = entry.offsets {
                 self.merger.add(offsets.iter().cloned())
             }
         }
 
         for offsets in self.merger.iter() {
-            try!(self.minhash_file_reader.seek(
-                SeekFrom::Start(offsets.minhash_offset)).map_err(|e| LookupError::Backend(Error::SeekMinhashFile(e))));
-            let minhash: Vec<_> = try!(Deserialize::deserialize(
-                &mut Deserializer::new(&mut self.minhash_file_reader)).map_err(|e| LookupError::Backend(Error::DeserializeMinhash(e))));
+            self.minhash_file_reader.seek(
+                SeekFrom::Start(offsets.minhash_offset)).map_err(|e| LookupError::Backend(Error::SeekMinhashFile(e)))?;
+            let minhash: Vec<_> = Deserialize::deserialize(
+                &mut Deserializer::new(&mut self.minhash_file_reader)).map_err(|e| LookupError::Backend(Error::DeserializeMinhash(e)))?;
             if let Some(similarity) = filter.accept_minhash_similarity(&signature.minhash, &minhash) {
-                try!(self.docs_file_reader.seek(
-                    SeekFrom::Start(offsets.doc_offset)).map_err(|e| LookupError::Backend(Error::SeekDocsFile(e))));
-                let doc: Arc<D> = Arc::new(try!(Deserialize::deserialize(
-                    &mut Deserializer::new(&mut self.docs_file_reader)).map_err(|e| LookupError::Backend(Error::DeserializeDoc(e)))));
-                try!(collector.receive(similarity, doc).map_err(LookupError::Collector));
+                self.docs_file_reader.seek(
+                    SeekFrom::Start(offsets.doc_offset)).map_err(|e| LookupError::Backend(Error::SeekDocsFile(e)))?;
+                let doc: Arc<D> = Arc::new(Deserialize::deserialize(
+                    &mut Deserializer::new(&mut self.docs_file_reader)).map_err(|e| LookupError::Backend(Error::DeserializeDoc(e)))?);
+                collector.receive(similarity, doc).map_err(LookupError::Collector)?;
             }
         }
 

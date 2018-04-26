@@ -21,7 +21,7 @@ impl Tokens {
     pub fn set_stop_words<I, E>(&mut self, words: I) -> Result<(), E> where I: Iterator<Item = Result<String, E>> {
         let mut dict = HashSet::new();
         for maybe_word in words {
-            let word = try!(maybe_word);
+            let word = maybe_word?;
             let mut hasher = FnvHasher::default();
             word.hash(&mut hasher);
             dict.insert(hasher.finish());

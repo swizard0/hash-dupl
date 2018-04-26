@@ -307,11 +307,11 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
             Config { band_min_probability: p, .. } if p < 0.0 || p > 1.0 =>
                 Err(Error::Config(ConfigError::InvalidBandMinProbabilityRange)),
             config => {
-                let state = match try!(backend.load_state().map_err(Error::Backend)) {
+                let state = match backend.load_state().map_err(Error::Backend)? {
                     Some(state) => state,
                     None => {
                         let new_state = Arc::new(State::new(config));
-                        try!(backend.save_state(new_state.clone()).map_err(Error::Backend));
+                        backend.save_state(new_state.clone()).map_err(Error::Backend)?;
                         new_state
                     }
                 };
@@ -353,7 +353,7 @@ impl<D, S, B, SE, BE> HashDupl<S, B> where S: Shingler<Error = SE>, B: Backend<E
                 })
                 .min()
                 .ok_or(Error::NoShinglesBuilt);
-            signature.minhash.push(try!(maybe_minhash));
+            signature.minhash.push(maybe_minhash?);
         }
 
         let mut start = 0;

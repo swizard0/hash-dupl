@@ -96,7 +96,7 @@ impl<D> Stream<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'sta
             Ok(ref metadata) if metadata.is_dir() => (),
             Ok(..) => return Err(Error::WindowsDatabaseNotADir(base_dir.clone())),
             Err(ref e) if e.kind() == io::ErrorKind::NotFound =>
-                try!(fs::create_dir(&base_dir).map_err(|e| Error::CreateWindowsDir(base_dir.clone(), e))),
+                fs::create_dir(&base_dir).map_err(|e| Error::CreateWindowsDir(base_dir.clone(), e))?,
             Err(e) => return Err(Error::StatWindowsDir(base_dir.clone(), e)),
         }
 
@@ -105,9 +105,9 @@ impl<D> Stream<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'sta
 
         let mut windows_backends = Vec::new();
         // open existing windows
-        for entry in try!(fs::read_dir(&base_dir).map_err(|e| Error::ReadWindowsDir(base_dir.clone(), e))) {
-            let database = try!(entry.map_err(|e| Error::ReadWindowsDirEntry(base_dir.clone(), e))).path();
-            let stat = try!(fs::metadata(&*database).map_err(|e| Error::StatWindowsDirEntry(database.clone(), e)));
+        for entry in fs::read_dir(&base_dir).map_err(|e| Error::ReadWindowsDir(base_dir.clone(), e))? {
+            let database = entry.map_err(|e| Error::ReadWindowsDirEntry(base_dir.clone(), e))?.path();
+            let stat = fs::metadata(&*database).map_err(|e| Error::StatWindowsDirEntry(database.clone(), e))?;
             if !stat.is_dir() {
                 continue;
             }
@@ -122,20 +122,20 @@ impl<D> Stream<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'sta
                     continue
                 },
                 other_err =>
-                    try!(other_err),
+                    other_err?,
             };
 
-            if !try!(pile_lookup.load_state()).is_some() {
+            if !pile_lookup.load_state()?.is_some() {
                 return Err(Error::MissingStateForWindow(database.clone()))
             }
 
             let mut saved_at_filename = database.clone();
             saved_at_filename.push("saved_at.bin");
-            let mut saved_at_file = try!(fs::File::open(&saved_at_filename).map_err(|e| Error::OpenSavedAtFile(saved_at_filename, e)));
+            let mut saved_at_file = fs::File::open(&saved_at_filename).map_err(|e| Error::OpenSavedAtFile(saved_at_filename, e))?;
             let mut deserializer = rmp_serde::Deserializer::new(&mut saved_at_file);
             let saved_at = time::Timespec {
-                sec: try!(Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeSavedAt)),
-                nsec: try!(Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeSavedAt)),
+                sec: Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeSavedAt)?,
+                nsec: Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeSavedAt)?,
             };
 
             windows_backends.push(InnerWindow {
@@ -161,7 +161,7 @@ impl<D> Stream<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'sta
             lookup_tx: worker_tx,
             lookup_rx: stream_rx,
         };
-        try!(stream.create_rw_window());
+        stream.create_rw_window()?;
         Ok(stream)
     }
 
@@ -169,8 +169,8 @@ impl<D> Stream<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'sta
         let mut common_state = self.state.as_ref().map(|s| s.clone());
         for win in self.windows.iter_mut() {
             let (database_dir, maybe_state) = match win {
-                &mut Window::Rw(InnerWindow { database_dir: ref dir, backend: ref mut win, .. }) => (dir, try!(win.load_state())),
-                &mut Window::Ro(InnerWindow { database_dir: ref dir, backend: ref mut win, .. }) => (dir, try!(win.load_state())),
+                &mut Window::Rw(InnerWindow { database_dir: ref dir, backend: ref mut win, .. }) => (dir, win.load_state()?),
+                &mut Window::Ro(InnerWindow { database_dir: ref dir, backend: ref mut win, .. }) => (dir, win.load_state()?),
             };
 
             match (maybe_state, &mut common_state) {
@@ -200,9 +200,9 @@ impl<D> Stream<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'sta
             index += 1;
         }
 
-        let mut pile_rw = try!(pile_rw::PileRw::new(&database_dir, self.params.lookup_params.clone(), self.params.compile_params.clone()));
+        let mut pile_rw = pile_rw::PileRw::new(&database_dir, self.params.lookup_params.clone(), self.params.compile_params.clone())?;
         if let Some(state) = common_state.take() {
-            try!(pile_rw.save_state(state.clone()));
+            pile_rw.save_state(state.clone())?;
             if self.state.is_none() {
                 self.state = Some(state)
             }
@@ -212,10 +212,10 @@ impl<D> Stream<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'sta
         {
             let mut saved_at_filename = database_dir.clone();
             saved_at_filename.push("saved_at.bin");
-            let mut saved_at_file = try!(fs::File::create(&saved_at_filename).map_err(|e| Error::CreateSavedAtFile(saved_at_filename, e)));
+            let mut saved_at_file = fs::File::create(&saved_at_filename).map_err(|e| Error::CreateSavedAtFile(saved_at_filename, e))?;
             let mut serializer = rmp_serde::Serializer::new(&mut saved_at_file);
-            try!(saved_at.sec.serialize(&mut serializer).map_err(Error::SerializeSavedAt));
-            try!(saved_at.nsec.serialize(&mut serializer).map_err(Error::SerializeSavedAt));
+            saved_at.sec.serialize(&mut serializer).map_err(Error::SerializeSavedAt)?;
+            saved_at.nsec.serialize(&mut serializer).map_err(Error::SerializeSavedAt)?;
         }
 
         self.rw_window = Some(InnerWindow {
@@ -235,7 +235,7 @@ impl<D> Backend for Stream<D> where D: Serialize + Deserialize<'static> + Send +
         if self.state.is_none() {
             if let Some(InnerWindow { backend: ref mut bkd, ..}) = self.rw_window {
                 self.state = Some(state.clone());
-                Ok(try!(bkd.save_state(state)))
+                Ok(bkd.save_state(state)?)
             } else {
                 Err(Error::WindowRWNotCreated)
             }
@@ -250,7 +250,7 @@ impl<D> Backend for Stream<D> where D: Serialize + Deserialize<'static> + Send +
 
     fn insert(&mut self, signature: Arc<Signature>, doc: Arc<D>) -> Result<(), Error> {
         if let Some(InnerWindow { backend: ref mut bkd, ..}) = self.rw_window {
-            Ok(try!(bkd.insert(signature, doc)))
+            Ok(bkd.insert(signature, doc)?)
         } else {
             Err(Error::WindowRWNotCreated)
         }
@@ -279,7 +279,7 @@ impl<D> Backend for Stream<D> where D: Serialize + Deserialize<'static> + Send +
         while waiting_replies > 0 {
             match self.lookup_rx.recv() {
                 Ok(Ok(Rep::LookupResult(similarity, doc))) =>
-                    try!(collector.receive(similarity, doc).map_err(LookupError::Collector)),
+                    collector.receive(similarity, doc).map_err(LookupError::Collector)?,
                 Ok(Ok(Rep::LookupFinish)) =>
                     waiting_replies -= 1,
                 Ok(Err(e)) => {
@@ -300,9 +300,9 @@ impl<D> Backend for Stream<D> where D: Serialize + Deserialize<'static> + Send +
 
     fn rotate(&mut self) -> Result<(), Error> {
         if let Some(mut window) = self.rw_window.take() {
-            try!(window.backend.rotate());
+            window.backend.rotate()?;
             self.windows.push(Window::Rw(window));
-            try!(self.create_rw_window());
+            self.create_rw_window()?;
             if self.windows.len() > self.params.windows_count {
                 // find eldest window
                 let mut eldest = None;
@@ -322,7 +322,7 @@ impl<D> Backend for Stream<D> where D: Serialize + Deserialize<'static> + Send +
                         Window::Ro(InnerWindow { database_dir: database, .. }) => database,
                         Window::Rw(InnerWindow { database_dir: database, .. }) => database,
                     };
-                    try!(fs::remove_dir_all(&database).map_err(|e| Error::RemoveWindowDir(database, e)));
+                    fs::remove_dir_all(&database).map_err(|e| Error::RemoveWindowDir(database, e))?;
                 }
             }
             Ok(())

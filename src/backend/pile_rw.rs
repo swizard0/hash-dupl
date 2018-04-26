@@ -38,7 +38,7 @@ impl<D> PileRw<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'sta
         base_dir.push(&database_dir);
 
         let in_memory = in_memory::InMemory::new();
-        let compile = try!(pile_compile::PileCompile::new(&base_dir, compile_params).map_err(Error::PileCompile));
+        let compile = pile_compile::PileCompile::new(&base_dir, compile_params).map_err(Error::PileCompile)?;
         Ok(PileRw {
             database_dir: Arc::new(base_dir),
             lookup_params: lookup_params,
@@ -84,8 +84,8 @@ impl<D> Backend for PileRw<D> where D: Serialize + Deserialize<'static> + Send +
             RunState::Invalid =>
                 unreachable!(),
             RunState::Filling { in_memory: ref mut mem_backend, compile: ref mut pile_backend } => {
-                try!(mem_backend.save_state(state.clone()).map_err(|_| Error::InMemory));
-                try!(pile_backend.save_state(state).map_err(Error::PileCompile));
+                mem_backend.save_state(state.clone()).map_err(|_| Error::InMemory)?;
+                pile_backend.save_state(state).map_err(Error::PileCompile)?;
                 Ok(())
             },
             RunState::Freezing { .. } | RunState::Switching { .. } | RunState::Freezed { .. } =>

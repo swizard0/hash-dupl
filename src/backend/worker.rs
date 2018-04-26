@@ -129,7 +129,7 @@ impl<B, E> Backend for Worker<B, E> where B: Backend, E: fmt::Debug + From<B::Er
         loop {
             match self.rx.recv() {
                 Ok(Ok(Rep::LookupResult(similarity, doc))) =>
-                    try!(collector.receive(similarity, doc).map_err(LookupError::Collector)),
+                    collector.receive(similarity, doc).map_err(LookupError::Collector)?,
                 Ok(Ok(Rep::LookupFinish)) =>
                     return collector.finish().map_err(LookupError::Collector),
                 Ok(Err(e)) =>
