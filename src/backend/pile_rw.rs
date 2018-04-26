@@ -8,7 +8,7 @@ use super::worker::{Worker, Req, Rep};
 use super::{in_memory, pile_lookup, pile_compile};
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
 
-enum RunState<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+enum RunState<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'static {
     Invalid,
     Filling { in_memory: Worker<in_memory::InMemory<D>, ()>, compile: Worker<pile_compile::PileCompile<D>, pile_compile::Error>, },
     Freezing { in_memory: Worker<in_memory::InMemory<D>, ()>, compile: Worker<pile_compile::PileCompile<D>, pile_compile::Error>, },
@@ -16,7 +16,7 @@ enum RunState<D> where D: Serialize + Deserialize + Send + Sync + 'static {
     Freezed { lookup: pile_lookup::PileLookup<D>, },
 }
 
-pub struct PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+pub struct PileRw<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'static {
     database_dir: Arc<PathBuf>,
     lookup_params: pile_lookup::Params,
     state: RunState<D>,
@@ -30,7 +30,7 @@ pub enum Error {
     PileLookup(pile_lookup::Error),
 }
 
-impl<D> PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+impl<D> PileRw<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'static {
     pub fn new<P>(database_dir: P, lookup_params: pile_lookup::Params, compile_params: pile_compile::Params) ->
         Result<PileRw<D>, Error> where P: AsRef<Path>
     {
@@ -54,7 +54,7 @@ impl<D> PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
     }
 }
 
-impl<D> Drop for PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+impl<D> Drop for PileRw<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'static {
     fn drop(&mut self) {
         match mem::replace(&mut self.state, RunState::Invalid) {
             RunState::Invalid =>
@@ -75,7 +75,7 @@ impl<D> Drop for PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'sta
     }
 }
 
-impl<D> Backend for PileRw<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+impl<D> Backend for PileRw<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'static {
     type Error = Error;
     type Document = D;
 

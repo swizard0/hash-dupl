@@ -7,6 +7,7 @@ extern crate tokenizer;
 extern crate token_ngrams;
 extern crate slices_merger;
 extern crate bin_merge_pile;
+#[macro_use] extern crate serde_derive;
 
 use std::sync::Arc;
 use std::ops::Deref;

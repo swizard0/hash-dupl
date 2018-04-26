@@ -227,7 +227,7 @@ mod test {
         {
             let mut state_file = fs::File::open("/tmp/pile_compile_a/state.bin").unwrap();
             let mut deserializer = Deserializer::new(&mut state_file);
-            let state_read = Deserialize::deserialize(&mut deserializer).unwrap();
+            let state_read = Arc::new(Deserialize::deserialize(&mut deserializer).unwrap());
             assert_eq!(state, state_read);
         }
     }
@@ -278,10 +278,10 @@ mod test {
 
             let mut docs_file = fs::File::open("/tmp/pile_compile_b/docs.bin").unwrap();
             docs_file.seek(SeekFrom::Start(doc_a_offsets.doc_offset)).unwrap();
-            let restored_doc_a: Arc<String> = Deserialize::deserialize(&mut Deserializer::new(&mut docs_file)).unwrap();
+            let restored_doc_a: Arc<String> = Arc::new(Deserialize::deserialize(&mut Deserializer::new(&mut docs_file)).unwrap());
             assert_eq!(restored_doc_a, doc_a);
             docs_file.seek(SeekFrom::Start(doc_b_offsets.doc_offset)).unwrap();
-            let restored_doc_b: Arc<String> = Deserialize::deserialize(&mut Deserializer::new(&mut docs_file)).unwrap();
+            let restored_doc_b: Arc<String> = Arc::new(Deserialize::deserialize(&mut Deserializer::new(&mut docs_file)).unwrap());
             assert_eq!(restored_doc_b, doc_b);
 
             let mut minhash_file = fs::File::open("/tmp/pile_compile_b/minhash.bin").unwrap();

@@ -2,18 +2,19 @@ use std::borrow::Borrow;
 use std::marker::PhantomData;
 use std::cmp::{PartialEq, PartialOrd, Ordering};
 use time::Timespec;
-use serde::{de, Serialize, Serializer, Deserialize, Deserializer};
+use serde::de::{self, Deserialize, Deserializer};
+use serde::ser::{Serialize, SerializeTuple, Serializer};
 use bin_merge_pile::reduce::Reducer;
 use slices_merger::SlicesMerger;
 use super::super::{Config, State};
 
-#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Debug)]
 pub struct Offset {
     pub minhash_offset: u64,
     pub doc_offset: u64,
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct BandEntry {
     pub band: u64,
     pub offsets: Option<Vec<Offset>>,
@@ -49,73 +50,34 @@ impl PartialOrd for BandEntry {
     }
 }
 
-impl Serialize for Offset {
-    fn serialize<S>(&self, serializer: &mut S) -> Result<(), S::Error> where S: Serializer {
-        try!(self.minhash_offset.serialize(serializer));
-        try!(self.doc_offset.serialize(serializer));
-        Ok(())
-    }
-}
-
-impl Serialize for BandEntry {
-    fn serialize<S>(&self, serializer: &mut S) -> Result<(), S::Error> where S: Serializer {
-        try!(self.band.serialize(serializer));
-        try!(self.offsets.serialize(serializer));
-        Ok(())
-    }
-}
-
-impl Deserialize for Offset {
-    fn deserialize<D>(deserializer: &mut D) -> Result<Offset, D::Error> where D: Deserializer {
-        Ok(Offset {
-            minhash_offset: try!(Deserialize::deserialize(deserializer)),
-            doc_offset: try!(Deserialize::deserialize(deserializer)),
-        })
-    }
-}
-
-impl Deserialize for BandEntry {
-    fn deserialize<D>(deserializer: &mut D) -> Result<BandEntry, D::Error> where D: Deserializer {
-        Ok(BandEntry {
-            band: try!(Deserialize::deserialize(deserializer)),
-            offsets: try!(Deserialize::deserialize(deserializer)),
-        })
-    }
-}
-
-const STATE_MAGIC: u64 = 0xb5e05a82649d271f;
+const STATE_MAGIC: u64 = 0xb6e05a82649d271f;
 
 impl Serialize for State {
-    fn serialize<S>(&self, serializer: &mut S) -> Result<(), S::Error> where S: Serializer {
-        try!(STATE_MAGIC.serialize(serializer));
-        try!(self.config.shingle_length.serialize(serializer));
-        try!(self.config.signature_length.serialize(serializer));
-        try!(self.config.similarity_threshold.serialize(serializer));
-        try!(self.config.band_min_probability.serialize(serializer));
-        try!(self.created_at.sec.serialize(serializer));
-        try!(self.created_at.nsec.serialize(serializer));
-        try!(self.band_length.serialize(serializer));
-        try!(self.minhash_seeds.serialize(serializer));
-        try!(self.bands_seeds.serialize(serializer));
-        Ok(())
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+        let mut ts = serializer.serialize_tuple(10)?;
+        ts.serialize_element(&STATE_MAGIC)?;
+        ts.serialize_element(&self.config.shingle_length)?;
+        ts.serialize_element(&self.config.signature_length)?;
+        ts.serialize_element(&self.config.similarity_threshold)?;
+        ts.serialize_element(&self.config.band_min_probability)?;
+        ts.serialize_element(&self.created_at.sec)?;
+        ts.serialize_element(&self.created_at.nsec)?;
+        ts.serialize_element(&self.band_length)?;
+        ts.serialize_element(&self.minhash_seeds)?;
+        ts.serialize_element(&self.bands_seeds)?;
+        ts.end()
     }
 }
 
-impl Deserialize for State {
-    fn deserialize<D>(deserializer: &mut D) -> Result<State, D::Error> where D: Deserializer {
-        let magic: u64 = try!(Deserialize::deserialize(deserializer));
+impl<'a> Deserialize<'a> for State {
+    fn deserialize<D>(deserializer: D) -> Result<State, D::Error> where D: Deserializer<'a> {
+        let (magic, shingle_length, signature_length, similarity_threshold,
+             band_min_probability, sec, nsec, band_length, minhash_seeds, bands_seeds)
+            : (u64, _, _, _, _, _, _, _, _, _)
+            = Deserialize::deserialize(deserializer)?;
         if magic != STATE_MAGIC {
             return Err(de::Error::custom(format!("invalid state magic: {}, expected: {}", magic, STATE_MAGIC)))
         }
-        let shingle_length = try!(Deserialize::deserialize(deserializer));
-        let signature_length = try!(Deserialize::deserialize(deserializer));
-        let similarity_threshold = try!(Deserialize::deserialize(deserializer));
-        let band_min_probability = try!(Deserialize::deserialize(deserializer));
-        let sec = try!(Deserialize::deserialize(deserializer));
-        let nsec = try!(Deserialize::deserialize(deserializer));
-        let band_length = try!(Deserialize::deserialize(deserializer));
-        let minhash_seeds = try!(Deserialize::deserialize(deserializer));
-        let bands_seeds = try!(Deserialize::deserialize(deserializer));
         Ok(State {
             config: Config {
                 shingle_length: shingle_length,

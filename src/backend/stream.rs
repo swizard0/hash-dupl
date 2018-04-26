@@ -71,12 +71,12 @@ struct InnerWindow<B> {
     backend: B,
 }
 
-enum Window<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+enum Window<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'static {
     Rw(InnerWindow<Worker<pile_rw::PileRw<D>, Error>>),
     Ro(InnerWindow<Worker<pile_lookup::PileLookup<D>, Error>>),
 }
 
-pub struct Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+pub struct Stream<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'static {
     state: Option<Arc<State>>,
     windows_dir: PathBuf,
     windows: Vec<Window<D>>,
@@ -86,7 +86,7 @@ pub struct Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
     lookup_rx: Receiver<Result<Rep<D>, Error>>,
 }
 
-impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+impl<D> Stream<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'static {
     pub fn new<P>(windows_dir: P, params: Params) -> Result<Stream<D>, Error> where P: AsRef<Path> {
         let mut base_dir = PathBuf::new();
         base_dir.push(&windows_dir);
@@ -227,7 +227,7 @@ impl<D> Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
     }
 }
 
-impl<D> Backend for Stream<D> where D: Serialize + Deserialize + Send + Sync + 'static {
+impl<D> Backend for Stream<D> where D: Serialize + Deserialize<'static> + Send + Sync + 'static {
     type Error = Error;
     type Document = D;
 

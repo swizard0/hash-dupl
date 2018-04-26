@@ -90,7 +90,7 @@ impl<D> PileLookup<D> {
     }
 }
 
-impl<D> Backend for PileLookup<D> where D: Deserialize {
+impl<'a, D> Backend for PileLookup<D> where D: Deserialize<'a> {
     type Error = Error;
     type Document = D;
 
@@ -105,7 +105,7 @@ impl<D> Backend for PileLookup<D> where D: Deserialize {
             match fs::File::open(&self.state_filename) {
                 Ok(mut state_file) => {
                     let mut deserializer = rmp_serde::Deserializer::new(&mut state_file);
-                    let state = try!(Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeState));
+                    let state = Arc::new(try!(Deserialize::deserialize(&mut deserializer).map_err(Error::DeserializeState)));
                     self.state = Some(state);
                     Ok(self.state.as_ref().map(|s| s.clone()))
                 },
@@ -140,8 +140,8 @@ impl<D> Backend for PileLookup<D> where D: Deserialize {
             if let Some(similarity) = filter.accept_minhash_similarity(&signature.minhash, &minhash) {
                 try!(self.docs_file_reader.seek(
                     SeekFrom::Start(offsets.doc_offset)).map_err(|e| LookupError::Backend(Error::SeekDocsFile(e))));
-                let doc: Arc<D> = try!(Deserialize::deserialize(
-                    &mut Deserializer::new(&mut self.docs_file_reader)).map_err(|e| LookupError::Backend(Error::DeserializeDoc(e))));
+                let doc: Arc<D> = Arc::new(try!(Deserialize::deserialize(
+                    &mut Deserializer::new(&mut self.docs_file_reader)).map_err(|e| LookupError::Backend(Error::DeserializeDoc(e)))));
                 try!(collector.receive(similarity, doc).map_err(LookupError::Collector));
             }
         }
