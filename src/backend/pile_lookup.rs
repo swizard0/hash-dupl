@@ -1,7 +1,7 @@
 use std::{io, fs};
 use std::sync::Arc;
 use std::marker::PhantomData;
-use std::io::{Seek, SeekFrom, BufReader};
+use std::io::{Read, Seek, SeekFrom, BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use bin_merge_pile::ntree_bkd;
 use bin_merge_pile::ntree::NTreeReader;
@@ -13,23 +13,34 @@ use super::pile_common::{Offset, BandEntry};
 use super::super::{Backend, CandidatesFilter, CandidatesCollector, Signature, State, LookupError};
 
 #[derive(Clone, Copy)]
+pub enum DataAccess {
+    FileSeek,
+    MemoryCache,
+}
+
+#[derive(Clone, Copy)]
 pub struct Params {
     pub mmap_type: ntree_bkd::mmap::MmapType,
+    pub data_access: DataAccess,
 }
 
 impl Default for Params {
     fn default() -> Params {
         Params {
             mmap_type: ntree_bkd::mmap::MmapType::TrueMmap { madv_willneed: true, },
+            data_access: DataAccess::FileSeek,
         }
     }
 }
 
+trait ReadAndSeek: Read + Seek + Send { }
+impl<T> ReadAndSeek for T where T: Read + Seek + Send { }
+
 pub struct PileLookup<D> {
     state: Option<Arc<State>>,
     state_filename: PathBuf,
-    minhash_file_reader: BufReader<fs::File>,
-    docs_file_reader: BufReader<fs::File>,
+    minhash_file_reader: Box<ReadAndSeek>,
+    docs_file_reader: Box<ReadAndSeek>,
     bands_index: ntree_bkd::mmap::MmapReader<BandEntry>,
     merger: SlicesMerger<Offset>,
     _marker: PhantomData<D>,
@@ -44,6 +55,8 @@ pub enum Error {
     OpenDocsFile(PathBuf, io::Error),
     SeekMinhashFile(io::Error),
     SeekDocsFile(io::Error),
+    ReadMinhashFile(PathBuf, io::Error),
+    ReadDocsFile(PathBuf, io::Error),
     OpenBandsFile(ntree_bkd::mmap::Error),
     BandsLookup(ntree_bkd::mmap::Error),
     DeserializeState(rmp_serde::decode::Error),
@@ -65,11 +78,37 @@ impl<D> PileLookup<D> {
 
         let mut minhash_filename = base_dir.clone();
         minhash_filename.push("minhash.bin");
-        let minhash_file = fs::File::open(&minhash_filename).map_err(|e| Error::OpenMinhashFile(minhash_filename, e))?;
+        let minhash_file: Box<ReadAndSeek> = {
+            let mut file = BufReader::new(
+                fs::File::open(&minhash_filename).map_err(|e| Error::OpenMinhashFile(minhash_filename.clone(), e))?,
+            );
+            match params.data_access {
+                DataAccess::FileSeek =>
+                    Box::new(file),
+                DataAccess::MemoryCache => {
+                    let mut contents = Vec::new();
+                    file.read_to_end(&mut contents).map_err(|e| Error::ReadMinhashFile(minhash_filename.clone(), e))?;
+                    Box::new(Cursor::new(contents))
+                }
+            }
+        };
 
         let mut docs_filename = base_dir.clone();
         docs_filename.push("docs.bin");
-        let docs_file = fs::File::open(&docs_filename).map_err(|e| Error::OpenDocsFile(docs_filename, e))?;
+        let docs_file: Box<ReadAndSeek> = {
+            let mut file = BufReader::new(
+                fs::File::open(&docs_filename).map_err(|e| Error::OpenDocsFile(docs_filename.clone(), e))?,
+            );
+            match params.data_access {
+                DataAccess::FileSeek =>
+                    Box::new(file),
+                DataAccess::MemoryCache => {
+                    let mut contents = Vec::new();
+                    file.read_to_end(&mut contents).map_err(|e| Error::ReadDocsFile(docs_filename.clone(), e))?;
+                    Box::new(Cursor::new(contents))
+                }
+            }
+        };
 
         let mut index_filename = base_dir.clone();
         index_filename.push("bands.bin");
@@ -81,8 +120,8 @@ impl<D> PileLookup<D> {
         Ok(PileLookup {
             state: None,
             state_filename: state_filename,
-            minhash_file_reader: BufReader::new(minhash_file),
-            docs_file_reader: BufReader::new(docs_file),
+            minhash_file_reader: minhash_file,
+            docs_file_reader: docs_file,
             bands_index: bands_index,
             merger: SlicesMerger::new(),
             _marker: PhantomData,
