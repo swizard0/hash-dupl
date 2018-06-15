@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 use std::iter::Iterator;
 use std::collections::HashSet;
 use tokenizer;
-use tokenizer::{Token, Number};
+use tokenizer::Token;
 use token_ngrams::{Ngrams, Attrs, AcceptEverything};
 use fnv::FnvHasher;
 use super::super::{Shingles, Shingler};
@@ -41,13 +41,15 @@ impl<'a> TokenWithHash<'a> {
     fn new(token: Token, dict: Option<&'a HashSet<u64>>) -> TokenWithHash<'a> {
         let mut hasher = FnvHasher::default();
         match token {
-            Token::PlainWord(ref s) => s.hash(&mut hasher),
-            Token::MixedWord(ref s) => s.hash(&mut hasher),
-            Token::Number(Number::Integer(ref s)) => s.hash(&mut hasher),
-            Token::Number(Number::Float(ref s)) => s.hash(&mut hasher),
-            Token::Number(Number::BigInteger(ref s)) => s.hash(&mut hasher),
-            Token::Punct(ref s) => s.hash(&mut hasher),
-            Token::Whitespaces(..) | Token::Newline => (),
+            Token::PlainWord(..) |
+            Token::MixedWord(..) |
+            Token::Number(..) |
+            Token::Punct(..) |
+            Token::Emoji(..) =>
+                token.hash(&mut hasher),
+            Token::Whitespaces(..) |
+            Token::Newline =>
+                (),
         }
 
         TokenWithHash {
